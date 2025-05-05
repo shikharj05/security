@@ -15,12 +15,12 @@ import org.junit.Test;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
-import static org.opensearch.security.privileges.PrivilegesEvaluator.DNFOF_MATCHER;
-import static org.opensearch.security.privileges.PrivilegesEvaluator.isClusterPerm;
+import static org.opensearch.security.privileges.PrivilegesEvaluatorDefaultImpl.DNFOF_MATCHER;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.opensearch.security.privileges.Utils.isClusterPerm;
 
-public class PrivilegesEvaluatorUnitTest {
+public class PrivilegesEvaluatorDefaultImplUnitTest {
 
     private static final List<String> allowedDnfof = ImmutableList.of(
         "indices:admin/mappings/fields/get",

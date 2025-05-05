@@ -51,7 +51,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 @RunWith(MockitoJUnitRunner.class)
-public class RestLayerPrivilegesEvaluatorTest {
+public class RestLayerPrivilegesEvaluatorDefaultImplTest {
 
     @Mock(strictness = Mock.Strictness.LENIENT)
     private ClusterService clusterService;
@@ -91,7 +91,7 @@ public class RestLayerPrivilegesEvaluatorTest {
             "  cluster_permissions:\n" + //
             "  - any", CType.ROLES);
 
-        PrivilegesEvaluator privilegesEvaluator = createPrivilegesEvaluator(roles);
+        PrivilegesEvaluatorDefaultImpl privilegesEvaluator = createPrivilegesEvaluator(roles);
         RestLayerPrivilegesEvaluator restPrivilegesEvaluator = new RestLayerPrivilegesEvaluator(privilegesEvaluator);
 
         PrivilegesEvaluatorResponse response = restPrivilegesEvaluator.evaluate(TEST_USER, "route_name", Set.of(action));
@@ -102,7 +102,7 @@ public class RestLayerPrivilegesEvaluatorTest {
 
     @Test
     public void testEvaluate_NotInitialized_NullModel_ExceptionThrown() {
-        PrivilegesEvaluator privilegesEvaluator = createPrivilegesEvaluator(null);
+        PrivilegesEvaluatorDefaultImpl privilegesEvaluator = createPrivilegesEvaluator(null);
         RestLayerPrivilegesEvaluator restPrivilegesEvaluator = new RestLayerPrivilegesEvaluator(privilegesEvaluator);
         final OpenSearchSecurityException exception = assertThrows(
             OpenSearchSecurityException.class,
@@ -117,7 +117,7 @@ public class RestLayerPrivilegesEvaluatorTest {
         SecurityDynamicConfiguration<RoleV7> roles = SecurityDynamicConfiguration.fromYaml("test_role:\n" + //
             "  cluster_permissions:\n" + //
             "  - hw:greet", CType.ROLES);
-        PrivilegesEvaluator privilegesEvaluator = createPrivilegesEvaluator(roles);
+        PrivilegesEvaluatorDefaultImpl privilegesEvaluator = createPrivilegesEvaluator(roles);
         RestLayerPrivilegesEvaluator restPrivilegesEvaluator = new RestLayerPrivilegesEvaluator(privilegesEvaluator);
         PrivilegesEvaluatorResponse response = restPrivilegesEvaluator.evaluate(TEST_USER, "route_name", Set.of(action));
         assertThat(response.allowed, equalTo(true));
@@ -129,7 +129,7 @@ public class RestLayerPrivilegesEvaluatorTest {
         SecurityDynamicConfiguration<RoleV7> roles = SecurityDynamicConfiguration.fromYaml("test_role:\n" + //
             "  cluster_permissions:\n" + //
             "  - cluster:admin/opensearch/hw/greet", CType.ROLES);
-        PrivilegesEvaluator privilegesEvaluator = createPrivilegesEvaluator(roles);
+        PrivilegesEvaluatorDefaultImpl privilegesEvaluator = createPrivilegesEvaluator(roles);
         RestLayerPrivilegesEvaluator restPrivilegesEvaluator = new RestLayerPrivilegesEvaluator(privilegesEvaluator);
         PrivilegesEvaluatorResponse response = restPrivilegesEvaluator.evaluate(TEST_USER, "route_name", Set.of(action));
         assertThat(response.allowed, equalTo(true));
@@ -141,14 +141,14 @@ public class RestLayerPrivilegesEvaluatorTest {
         SecurityDynamicConfiguration<RoleV7> roles = SecurityDynamicConfiguration.fromYaml("test_role:\n" + //
             "  cluster_permissions:\n" + //
             "  - other_action", CType.ROLES);
-        PrivilegesEvaluator privilegesEvaluator = createPrivilegesEvaluator(roles);
+        PrivilegesEvaluatorDefaultImpl privilegesEvaluator = createPrivilegesEvaluator(roles);
         RestLayerPrivilegesEvaluator restPrivilegesEvaluator = new RestLayerPrivilegesEvaluator(privilegesEvaluator);
         PrivilegesEvaluatorResponse response = restPrivilegesEvaluator.evaluate(TEST_USER, "route_name", Set.of(action));
         assertThat(response.allowed, equalTo(false));
     }
 
-    PrivilegesEvaluator createPrivilegesEvaluator(SecurityDynamicConfiguration<RoleV7> roles) {
-        PrivilegesEvaluator privilegesEvaluator = new PrivilegesEvaluator(
+    PrivilegesEvaluatorDefaultImpl createPrivilegesEvaluator(SecurityDynamicConfiguration<RoleV7> roles) {
+        PrivilegesEvaluatorDefaultImpl privilegesEvaluator = new PrivilegesEvaluatorDefaultImpl(
             clusterService,
             () -> clusterService.state(),
             null,

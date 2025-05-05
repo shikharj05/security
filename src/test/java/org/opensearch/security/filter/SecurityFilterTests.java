@@ -29,7 +29,7 @@ import org.opensearch.security.configuration.AdminDNs;
 import org.opensearch.security.configuration.CompatConfig;
 import org.opensearch.security.configuration.DlsFlsRequestValve;
 import org.opensearch.security.http.XFFResolver;
-import org.opensearch.security.privileges.PrivilegesEvaluator;
+import org.opensearch.security.privileges.PrivilegesEvaluatorDefaultImpl;
 import org.opensearch.security.resolver.IndexResolverReplacer;
 import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.support.WildcardMatcher;
@@ -78,7 +78,7 @@ public class SecurityFilterTests {
     public void testImmutableIndicesWildcardMatcher() {
         final SecurityFilter filter = new SecurityFilter(
             settings,
-            mock(PrivilegesEvaluator.class),
+            mock(PrivilegesEvaluatorDefaultImpl.class),
             mock(AdminDNs.class),
             mock(DlsFlsRequestValve.class),
             mock(AuditLog.class),
@@ -101,7 +101,7 @@ public class SecurityFilterTests {
 
         final SecurityFilter filter = new SecurityFilter(
             settings,
-            mock(PrivilegesEvaluator.class),
+            mock(PrivilegesEvaluatorDefaultImpl.class),
             mock(AdminDNs.class),
             mock(DlsFlsRequestValve.class),
             auditLog,

@@ -36,7 +36,7 @@ public class RestLayerPrivilegesEvaluator {
             log.debug("Mapped roles: {}", context.getMappedRoles().toString());
         }
 
-        PrivilegesEvaluatorResponse result = privilegesEvaluator.getActionPrivileges().hasAnyClusterPrivilege(context, actions);
+        PrivilegesEvaluatorResponse result = privilegesEvaluator.hasAnyClusterPrivilege(context, actions);
 
         if (!result.allowed) {
             log.info(

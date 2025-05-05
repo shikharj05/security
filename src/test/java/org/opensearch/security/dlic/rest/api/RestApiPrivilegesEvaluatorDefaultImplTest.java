@@ -20,7 +20,7 @@ import org.junit.Test;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.security.configuration.AdminDNs;
-import org.opensearch.security.privileges.PrivilegesEvaluator;
+import org.opensearch.security.privileges.PrivilegesEvaluatorDefaultImpl;
 import org.opensearch.security.ssl.transport.PrincipalExtractor;
 import org.opensearch.threadpool.ThreadPool;
 
@@ -28,7 +28,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.mockito.Mockito.mock;
 
-public class RestApiPrivilegesEvaluatorTest {
+public class RestApiPrivilegesEvaluatorDefaultImplTest {
 
     private RestApiPrivilegesEvaluator privilegesEvaluator;
 
@@ -37,7 +37,7 @@ public class RestApiPrivilegesEvaluatorTest {
         this.privilegesEvaluator = new RestApiPrivilegesEvaluator(
             Settings.EMPTY,
             mock(AdminDNs.class),
-            mock(PrivilegesEvaluator.class),
+            mock(PrivilegesEvaluatorDefaultImpl.class),
             mock(PrincipalExtractor.class),
             mock(Path.class),
             mock(ThreadPool.class)

@@ -85,7 +85,8 @@ import org.opensearch.security.support.HeaderHelper;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.client.Client;
 
-import static org.opensearch.security.privileges.PrivilegesEvaluator.isClusterPerm;
+import static org.opensearch.security.privileges.Utils.isClusterPerm;
+
 
 public class DlsFlsValveImpl implements DlsFlsRequestValve {
 

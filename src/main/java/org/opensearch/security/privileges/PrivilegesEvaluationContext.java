@@ -130,7 +130,7 @@ public class PrivilegesEvaluationContext {
     }
 
     /**
-     * Note: Ideally, mappedRoles would be an unmodifiable attribute. PrivilegesEvaluator however contains logic
+     * Note: Ideally, mappedRoles would be an unmodifiable attribute. PrivilegesEvaluatorDefaultImpl however contains logic
      * related to OPENDISTRO_SECURITY_INJECTED_ROLES_VALIDATION which first validates roles and afterwards modifies
      * them again. Thus, we need to be able to set this attribute.
      *

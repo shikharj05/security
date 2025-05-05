@@ -32,12 +32,12 @@ import static org.opensearch.test.framework.TestSecurityConfig.AuthcDomain.AUTHC
 
 /**
 * This is a port for the test
-* org.opensearch.security.privileges.PrivilegesEvaluatorTest to the new test
+* org.opensearch.security.privileges.PrivilegesEvaluatorDefaultImplTest to the new test
 * framework for direct comparison
 */
 @RunWith(com.carrotsearch.randomizedtesting.RandomizedRunner.class)
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
-public class PrivilegesEvaluatorTest {
+public class PrivilegesEvaluatorDefaultImplTest {
 
     protected final static TestSecurityConfig.User NEGATIVE_LOOKAHEAD = new TestSecurityConfig.User("negative_lookahead_user").roles(
         new Role("negative_lookahead_role").indexPermissions("read").on("/^(?!t.*).*/").clusterPermissions("cluster_composite_ops")
