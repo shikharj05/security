@@ -53,7 +53,6 @@ import org.apache.logging.log4j.Logger;
 import org.opensearch.action.admin.indices.create.CreateIndexRequest;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.update.UpdateRequest;
-import org.opensearch.client.Client;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.core.common.Strings;
@@ -73,6 +72,7 @@ import org.opensearch.security.securityconf.impl.v7.RoleMappingsV7;
 import org.opensearch.security.securityconf.impl.v7.RoleV7;
 import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.test.framework.cluster.OpenSearchClientProvider.UserCredentialsHolder;
+import org.opensearch.transport.client.Client;
 
 import static org.apache.http.HttpHeaders.AUTHORIZATION;
 import static org.opensearch.action.support.WriteRequest.RefreshPolicy.IMMEDIATE;
@@ -178,7 +178,7 @@ public class TestSecurityConfig {
 
     public TestSecurityConfig withRestAdminUser(final String name, final String... permissions) {
         if (!internalUsers.containsKey(name)) {
-            user(new User(name, "REST Admin with permissions: " + Arrays.toString(permissions)).reserved(true));
+            user(new User(name).description("REST Admin with permissions: " + Arrays.toString(permissions)).reserved(true));
             final var roleName = name + "__rest_admin_role";
             roles(new Role(roleName).clusterPermissions(permissions));
 
@@ -459,6 +459,7 @@ public class TestSecurityConfig {
         List<String> backendRoles = new ArrayList<>();
         String requestedTenant;
         private Map<String, String> attributes = new HashMap<>();
+        private Map<MetadataKey<?>, Object> matchers = new HashMap<>();
 
         private Boolean hidden = null;
 
@@ -469,13 +470,13 @@ public class TestSecurityConfig {
         private String hash;
 
         public User(String name) {
-            this(name, null);
-        }
-
-        public User(String name, String description) {
             this.name = name;
             this.password = "secret";
+        }
+
+        public User description(String description) {
             this.description = description;
+            return this;
         }
 
         public User password(String password) {
@@ -517,6 +518,15 @@ public class TestSecurityConfig {
             return this;
         }
 
+        /**
+         * This method can be used to associate arbitrary data with a user, which is later supposed to act as a
+         * reference or test oracle inside a test.
+         */
+        public <T> User reference(MetadataKey<T> key, T data) {
+            this.matchers.put(key, data);
+            return this;
+        }
+
         public String getName() {
             return name;
         }
@@ -535,6 +545,15 @@ public class TestSecurityConfig {
 
         public Map<String, String> getAttributes() {
             return this.attributes;
+        }
+
+        public <T> T reference(MetadataKey<T> key) {
+            Object result = this.matchers.get(key);
+            if (result != null) {
+                return key.type.cast(result);
+            } else {
+                return null;
+            }
         }
 
         @Override
@@ -586,6 +605,25 @@ public class TestSecurityConfig {
         @Override
         public int hashCode() {
             return Objects.hash(name, password, roles, backendRoles, requestedTenant, attributes, hidden, reserved, description);
+        }
+
+        @Override
+        public String toString() {
+            if (description == null) {
+                return name;
+            } else {
+                return name + ": " + description;
+            }
+        }
+
+        public static class MetadataKey<T> {
+            private final String name;
+            private final Class<T> type;
+
+            public MetadataKey(String name, Class<T> type) {
+                this.name = name;
+                this.type = type;
+            }
         }
     }
 
@@ -836,7 +874,7 @@ public class TestSecurityConfig {
         }
 
         public Role on(TestIndex... testindices) {
-            this.indexPatterns = Arrays.asList(testindices).stream().map(TestIndex::getName).collect(Collectors.toList());
+            this.indexPatterns = Arrays.asList(testindices).stream().map(TestIndex::name).collect(Collectors.toList());
             this.role.indexPermissions.add(this);
             return this.role;
         }

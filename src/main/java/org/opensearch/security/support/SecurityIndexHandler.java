@@ -34,7 +34,6 @@ import org.opensearch.action.get.MultiGetRequest;
 import org.opensearch.action.get.MultiGetResponse;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.support.WriteRequest;
-import org.opensearch.client.Client;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.ThreadContext;
 import org.opensearch.common.xcontent.XContentType;
@@ -46,6 +45,7 @@ import org.opensearch.security.configuration.ConfigurationMap;
 import org.opensearch.security.securityconf.impl.CType;
 import org.opensearch.security.securityconf.impl.SecurityDynamicConfiguration;
 import org.opensearch.security.state.SecurityConfig;
+import org.opensearch.transport.client.Client;
 
 import static org.opensearch.core.xcontent.DeprecationHandler.THROW_UNSUPPORTED_OPERATION;
 import static org.opensearch.security.configuration.ConfigurationRepository.DEFAULT_CONFIG_VERSION;
@@ -97,13 +97,8 @@ public class SecurityIndexHandler {
                     final var configuration = new ImmutableSortedSet.Builder<>(Comparator.comparing(SecurityConfig::type));
                     for (final var cType : CType.values()) {
                         final var fileExists = Files.exists(cType.configFile(configDir));
-                        // Audit config is not packaged by default and while list is deprecated
-                        if ((cType == CType.AUDIT || cType == CType.WHITELIST) && !fileExists) continue;
-                        if (cType == CType.WHITELIST) {
-                            LOGGER.warn(
-                                "WHITELIST configuration type is deprecated and will be replaced with ALLOWLIST in the next major version"
-                            );
-                        }
+                        // Audit config is not packaged by default
+                        if (cType == CType.AUDIT && !fileExists) continue;
                         final var yamlContent = yamlContentFor(cType, configDir);
                         final var hash = Hashing.goodFastHash(MINIMUM_HASH_BITS).hashBytes(yamlContent.toBytesRef().bytes);
                         configuration.add(new SecurityConfig(cType, hash.toString(), null));

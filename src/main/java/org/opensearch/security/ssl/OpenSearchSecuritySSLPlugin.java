@@ -38,7 +38,6 @@ import org.apache.logging.log4j.Logger;
 import org.opensearch.OpenSearchException;
 import org.opensearch.SpecialPermission;
 import org.opensearch.Version;
-import org.opensearch.client.Client;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.cluster.service.ClusterService;
@@ -88,6 +87,7 @@ import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.SharedGroupFactory;
 import org.opensearch.transport.Transport;
 import org.opensearch.transport.TransportInterceptor;
+import org.opensearch.transport.client.Client;
 import org.opensearch.transport.netty4.ssl.SecureNetty4Transport;
 import org.opensearch.watcher.ResourceWatcherService;
 
@@ -116,7 +116,6 @@ public class OpenSearchSecuritySSLPlugin extends Plugin implements SystemIndexPl
         System.getProperty("opensearch.unsafe.use_netty_default_allocator"),
         false
     );
-    public static final boolean OPENSSL_SUPPORTED = (PlatformDependent.javaVersion() < 12) && USE_NETTY_DEFAULT_ALLOCATOR;
     protected final Logger log = LogManager.getLogger(this.getClass());
     public static final String CLIENT_TYPE = "client.type";
     protected final boolean client;
@@ -418,24 +417,8 @@ public class OpenSearchSecuritySSLPlugin extends Plugin implements SystemIndexPl
         settings.add(Setting.simpleString(SSLConfigConstants.SECURITY_SSL_HTTP_TRUSTSTORE_TYPE, Property.NodeScope, Property.Filtered));
         settings.add(
             Setting.boolSetting(
-                SSLConfigConstants.SECURITY_SSL_HTTP_ENABLE_OPENSSL_IF_AVAILABLE,
-                OPENSSL_SUPPORTED,
-                Property.NodeScope,
-                Property.Filtered
-            )
-        );
-        settings.add(
-            Setting.boolSetting(
                 SSLConfigConstants.SECURITY_SSL_HTTP_ENABLED,
                 SSLConfigConstants.SECURITY_SSL_HTTP_ENABLED_DEFAULT,
-                Property.NodeScope,
-                Property.Filtered
-            )
-        );
-        settings.add(
-            Setting.boolSetting(
-                SSLConfigConstants.SECURITY_SSL_TRANSPORT_ENABLE_OPENSSL_IF_AVAILABLE,
-                OPENSSL_SUPPORTED,
                 Property.NodeScope,
                 Property.Filtered
             )
@@ -606,7 +589,7 @@ public class OpenSearchSecuritySSLPlugin extends Plugin implements SystemIndexPl
             Setting.simpleString(SSLConfigConstants.SECURITY_SSL_HTTP_PEMTRUSTEDCAS_FILEPATH, Property.NodeScope, Property.Filtered)
         );
 
-        settings.add(Setting.simpleString(SSLConfigConstants.SSECURITY_SSL_HTTP_CRL_FILE, Property.NodeScope, Property.Filtered));
+        settings.add(Setting.simpleString(SSLConfigConstants.SECURITY_SSL_HTTP_CRL_FILE, Property.NodeScope, Property.Filtered));
         settings.add(Setting.boolSetting(SSLConfigConstants.SECURITY_SSL_HTTP_CRL_VALIDATE, false, Property.NodeScope, Property.Filtered));
         settings.add(
             Setting.boolSetting(

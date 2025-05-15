@@ -26,11 +26,10 @@ import org.opensearch.action.get.GetRequest;
 import org.opensearch.action.get.GetResponse;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.support.WriteRequest.RefreshPolicy;
-import org.opensearch.client.Client;
 import org.opensearch.client.RequestOptions;
 import org.opensearch.client.RestHighLevelClient;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.security.auditlog.AbstractAuditlogiUnitTest;
+import org.opensearch.security.auditlog.AbstractAuditlogUnitTest;
 import org.opensearch.security.auditlog.AuditTestUtils;
 import org.opensearch.security.auditlog.config.AuditConfig;
 import org.opensearch.security.auditlog.impl.AuditCategory;
@@ -41,6 +40,7 @@ import org.opensearch.security.compliance.ComplianceConfig;
 import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.test.DynamicSecurityConfig;
 import org.opensearch.security.test.helper.rest.RestHelper.HttpResponse;
+import org.opensearch.transport.client.Client;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -52,7 +52,7 @@ import static org.hamcrest.core.AnyOf.anyOf;
 import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.assertThrows;
 
-public class ComplianceAuditlogTest extends AbstractAuditlogiUnitTest {
+public class ComplianceAuditlogTest extends AbstractAuditlogUnitTest {
 
     @Test
     public void testSourceFilter() throws Exception {
@@ -290,7 +290,7 @@ public class ComplianceAuditlogTest extends AbstractAuditlogiUnitTest {
 
             HttpResponse response = rh.executeGetRequest("_search?pretty", encodeBasicHeader("admin", "admin"));
             assertThat(response.getStatusCode(), equalTo(HttpStatus.SC_OK));
-        }, 14);
+        }, 21);
 
         final List<String> documentIds = messages.stream().map(AuditMessage::getDocId).distinct().collect(Collectors.toList());
         assertThat(documentIds, equalTo(expectedDocumentsTypes));
@@ -301,7 +301,13 @@ public class ComplianceAuditlogTest extends AbstractAuditlogiUnitTest {
             assertThat(
                 "Doc " + docId + " should have a read/write config message",
                 messagesByDocId.stream().map(AuditMessage::getCategory).collect(Collectors.toList()),
-                equalTo(List.of(AuditCategory.COMPLIANCE_INTERNAL_CONFIG_WRITE, AuditCategory.COMPLIANCE_INTERNAL_CONFIG_READ))
+                equalTo(
+                    List.of(
+                        AuditCategory.COMPLIANCE_INTERNAL_CONFIG_READ,
+                        AuditCategory.COMPLIANCE_INTERNAL_CONFIG_WRITE,
+                        AuditCategory.COMPLIANCE_INTERNAL_CONFIG_READ
+                    )
+                )
             );
         });
 

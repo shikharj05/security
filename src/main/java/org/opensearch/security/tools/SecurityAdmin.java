@@ -96,7 +96,7 @@ import org.opensearch.action.get.GetRequest;
 import org.opensearch.action.get.GetResponse;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.support.WriteRequest.RefreshPolicy;
-import org.opensearch.action.support.master.AcknowledgedResponse;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.client.Request;
 import org.opensearch.client.RequestOptions;
 import org.opensearch.client.Response;
@@ -107,7 +107,6 @@ import org.opensearch.client.indices.CreateIndexRequest;
 import org.opensearch.client.indices.GetIndexRequest;
 import org.opensearch.client.indices.GetIndexRequest.Feature;
 import org.opensearch.client.indices.GetIndexResponse;
-import org.opensearch.client.transport.NoNodeAvailableException;
 import org.opensearch.cluster.health.ClusterHealthStatus;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
@@ -131,6 +130,7 @@ import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.support.ConfigHelper;
 import org.opensearch.security.support.PemKeyReader;
 import org.opensearch.security.support.SecurityJsonNode;
+import org.opensearch.transport.client.transport.NoNodeAvailableException;
 
 import static org.opensearch.core.xcontent.DeprecationHandler.THROW_UNSUPPORTED_OPERATION;
 import static org.opensearch.security.support.SecurityUtils.replaceEnvVars;
@@ -845,8 +845,6 @@ public class SecurityAdmin {
                 final boolean populateFileIfEmpty = true;
                 success = retrieveFile(restHighLevelClient, cd + "nodes_dn_" + date + ".yml", index, "nodesdn", populateFileIfEmpty)
                     && success;
-                success = retrieveFile(restHighLevelClient, cd + "whitelist_" + date + ".yml", index, "whitelist", populateFileIfEmpty)
-                    && success;
                 success = retrieveFile(restHighLevelClient, cd + "allowlist_" + date + ".yml", index, "allowlist", populateFileIfEmpty)
                     && success;
                 return (success ? 0 : -1);
@@ -1355,7 +1353,6 @@ public class SecurityAdmin {
 
         success = retrieveFile(tc, backupDir.getAbsolutePath() + "/tenants.yml", index, "tenants") && success;
         success = retrieveFile(tc, backupDir.getAbsolutePath() + "/nodes_dn.yml", index, "nodesdn", true) && success;
-        success = retrieveFile(tc, backupDir.getAbsolutePath() + "/whitelist.yml", index, "whitelist", true) && success;
         success = retrieveFile(tc, backupDir.getAbsolutePath() + "/allowlist.yml", index, "allowlist", true) && success;
         success = retrieveFile(tc, backupDir.getAbsolutePath() + "/audit.yml", index, "audit") && success;
 
@@ -1374,7 +1371,6 @@ public class SecurityAdmin {
         success = uploadFile(tc, cd + "tenants.yml", index, "tenants", resolveEnvVars) && success;
 
         success = uploadFile(tc, cd + "nodes_dn.yml", index, "nodesdn", resolveEnvVars, true) && success;
-        success = uploadFile(tc, cd + "whitelist.yml", index, "whitelist", resolveEnvVars) && success;
         if (new File(cd + "audit.yml").exists()) {
             success = uploadFile(tc, cd + "audit.yml", index, "audit", resolveEnvVars) && success;
         }

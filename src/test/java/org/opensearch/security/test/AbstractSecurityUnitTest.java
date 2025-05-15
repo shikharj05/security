@@ -44,8 +44,8 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope.Scope;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import org.apache.hc.client5.http.config.TlsConfig;
 import org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManagerBuilder;
-import org.apache.hc.client5.http.nio.AsyncClientConnectionManager;
 import org.apache.hc.client5.http.ssl.ClientTlsStrategyBuilder;
 import org.apache.hc.client5.http.ssl.NoopHostnameVerifier;
 import org.apache.hc.core5.function.Factory;
@@ -72,7 +72,6 @@ import org.opensearch.action.admin.indices.create.CreateIndexRequest;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
-import org.opensearch.client.Client;
 import org.opensearch.client.RestClient;
 import org.opensearch.client.RestClientBuilder;
 import org.opensearch.client.RestHighLevelClient;
@@ -91,8 +90,7 @@ import org.opensearch.security.test.helper.file.FileHelper;
 import org.opensearch.security.test.helper.rest.RestHelper.HttpResponse;
 import org.opensearch.security.test.helper.rules.SecurityTestWatcher;
 import org.opensearch.threadpool.ThreadPool;
-
-import io.netty.handler.ssl.OpenSsl;
+import org.opensearch.transport.client.Client;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
@@ -123,8 +121,6 @@ public abstract class AbstractSecurityUnitTest extends RandomizedTest {
                 + " "
                 + System.getProperty("java.vm.name")
         );
-        log.info("Open SSL available: " + OpenSsl.isAvailable());
-        log.info("Open SSL version: " + OpenSsl.versionString());
         withRemoteCluster = Boolean.parseBoolean(System.getenv("TESTARG_unittests_with_remote_cluster"));
         log.info("With remote cluster: " + withRemoteCluster);
         // System.setProperty("security.display_lic_none","true");
@@ -134,7 +130,6 @@ public abstract class AbstractSecurityUnitTest extends RandomizedTest {
     public static final ThreadPool MOCK_POOL = new ThreadPool(Settings.builder().put("node.name", "mock").build());
 
     // TODO Test Matrix
-    protected boolean allowOpenSSL = false; // disabled, we test this already in SSL Plugin
     // enable//disable enterprise modules
     // 1node and 3 node
 
@@ -197,14 +192,13 @@ public abstract class AbstractSecurityUnitTest extends RandomizedTest {
                     })
                     .build();
 
-                final AsyncClientConnectionManager cm = PoolingAsyncClientConnectionManagerBuilder.create()
-                    .setTlsStrategy(tlsStrategy)
-                    .build();
-                builder.setConnectionManager(cm);
+                final PoolingAsyncClientConnectionManagerBuilder cm = PoolingAsyncClientConnectionManagerBuilder.create()
+                    .setTlsStrategy(tlsStrategy);
+
                 if (httpVersionPolicy != null) {
-                    builder.setVersionPolicy(httpVersionPolicy);
+                    cm.setDefaultTlsConfig(TlsConfig.custom().setVersionPolicy(httpVersionPolicy).build());
                 }
-                return builder;
+                return builder.setConnectionManager(cm.build());
             });
             return new RestHighLevelClient(restClientBuilder);
         } catch (Exception e) {
@@ -297,9 +291,7 @@ public abstract class AbstractSecurityUnitTest extends RandomizedTest {
 
         final String prefix = getResourceFolder() == null ? "" : getResourceFolder() + "/";
 
-        Settings.Builder builder = Settings.builder()
-            .put(SSLConfigConstants.SECURITY_SSL_HTTP_ENABLE_OPENSSL_IF_AVAILABLE, allowOpenSSL)
-            .put(SSLConfigConstants.SECURITY_SSL_TRANSPORT_ENABLE_OPENSSL_IF_AVAILABLE, allowOpenSSL);
+        Settings.Builder builder = Settings.builder();
 
         // If custom transport settings are not defined use defaults
         if (!hasCustomTransportSettings(other)) {

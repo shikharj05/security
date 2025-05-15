@@ -43,7 +43,6 @@ import org.opensearch.action.get.MultiGetItemResponse;
 import org.opensearch.action.get.MultiGetRequest;
 import org.opensearch.action.get.MultiGetResponse;
 import org.opensearch.action.get.MultiGetResponse.Failure;
-import org.opensearch.client.Client;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentHelper;
@@ -60,6 +59,7 @@ import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.support.ConfigHelper;
 import org.opensearch.security.support.SecurityUtils;
 import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.transport.client.Client;
 
 import static org.opensearch.core.xcontent.DeprecationHandler.THROW_UNSUPPORTED_OPERATION;
 
@@ -147,8 +147,8 @@ public class ConfigurationLoaderSecurity7 {
                 // Since NODESDN is newly introduced data-type applying for existing clusters as well, we make it backward compatible by
                 // returning valid empty
                 // SecurityDynamicConfiguration.
-                // Same idea for new setting WHITELIST/ALLOWLIST
-                if (cType == CType.NODESDN || cType == CType.WHITELIST || cType == CType.ALLOWLIST) {
+                // Same idea for new setting ALLOWLIST
+                if (cType == CType.NODESDN || cType == CType.ALLOWLIST) {
                     try {
                         SecurityDynamicConfiguration<?> empty = ConfigHelper.createEmptySdc(
                             cType,
@@ -290,7 +290,7 @@ public class ConfigurationLoaderSecurity7 {
 
             final String jsonAsString = SecurityUtils.replaceEnvVars(new String(parser.binaryValue(), StandardCharsets.UTF_8), settings);
             final JsonNode jsonNode = DefaultObjectMapper.readTree(jsonAsString);
-            int configVersion = 1;
+            int configVersion = 2;
 
             if (jsonNode.get("_meta") != null) {
                 assert jsonNode.get("_meta").get("type").asText().equals(id);

@@ -37,9 +37,6 @@ import org.opensearch.action.get.MultiGetRequest;
 import org.opensearch.action.get.MultiGetResponse;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.support.ActiveShardCount;
-import org.opensearch.client.AdminClient;
-import org.opensearch.client.Client;
-import org.opensearch.client.IndicesAdminClient;
 import org.opensearch.common.CheckedSupplier;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.ThreadContext;
@@ -51,6 +48,9 @@ import org.opensearch.security.configuration.ConfigurationMap;
 import org.opensearch.security.securityconf.impl.CType;
 import org.opensearch.security.state.SecurityConfig;
 import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.transport.client.AdminClient;
+import org.opensearch.transport.client.Client;
+import org.opensearch.transport.client.IndicesAdminClient;
 
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -122,9 +122,7 @@ public class SecurityIndexHandlerTest {
         CType.ROLESMAPPING,
         () -> ROLES_MAPPING_YAML,
         CType.TENANTS,
-        () -> emptyYamlConfigFor(CType.TENANTS),
-        CType.WHITELIST,
-        () -> emptyYamlConfigFor(CType.WHITELIST)
+        () -> emptyYamlConfigFor(CType.TENANTS)
     );
 
     @Rule
@@ -304,16 +302,15 @@ public class SecurityIndexHandlerTest {
     }
 
     @Test
-    public void testUploadDefaultConfiguration_shouldSkipWhitelist() throws IOException {
+    public void testUploadDefaultConfiguration_includeAuditFileIfPresent() throws IOException {
         final var listener = spy(
             ActionListener.<Set<SecurityConfig>>wrap(
-                configuration -> assertFalse(configuration.stream().anyMatch(sc -> sc.type() == CType.WHITELIST)),
+                configuration -> assertTrue(configuration.stream().anyMatch(sc -> sc.type() == CType.AUDIT)),
                 e -> fail("Unexpected behave")
             )
         );
 
-        for (final var c : CType.requiredConfigTypes()) {
-            if (c == CType.WHITELIST) continue;
+        for (final var c : CType.values()) {
             try (final var io = Files.newBufferedWriter(c.configFile(configFolder))) {
                 final var source = YAML.get(c).get();
                 io.write(source);

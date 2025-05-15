@@ -15,7 +15,6 @@ import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
 
-import org.opensearch.client.Client;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.rest.RestController;
@@ -29,6 +28,7 @@ import org.opensearch.security.ssl.SslSettingsManager;
 import org.opensearch.security.ssl.transport.PrincipalExtractor;
 import org.opensearch.security.user.UserService;
 import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.transport.client.Client;
 
 import static org.opensearch.security.support.ConfigConstants.SECURITY_RESTAPI_ADMIN_ENABLED;
 
@@ -90,8 +90,6 @@ public class SecurityRestApiActions {
             new TenantsApiAction(clusterService, threadPool, securityApiDependencies),
             new AccountApiAction(clusterService, threadPool, securityApiDependencies, passwordHasher),
             new NodesDnApiAction(clusterService, threadPool, securityApiDependencies),
-            new WhitelistApiAction(clusterService, threadPool, securityApiDependencies),
-            // FIXME change it as soon as WhitelistApiAction will be removed
             new AllowlistApiAction(Endpoint.ALLOWLIST, clusterService, threadPool, securityApiDependencies),
             new AuditApiAction(clusterService, threadPool, securityApiDependencies),
             new MultiTenancyConfigApiAction(clusterService, threadPool, securityApiDependencies),

@@ -12,14 +12,18 @@
 package org.opensearch.security.ssl;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.TrustManagerFactory;
 
 import org.opensearch.common.settings.Settings;
 import org.opensearch.http.HttpServerTransport;
 import org.opensearch.http.netty4.ssl.SecureNetty4HttpServerTransport;
+import org.opensearch.plugins.SecureAuxTransportSettingsProvider;
 import org.opensearch.plugins.SecureHttpTransportSettingsProvider;
 import org.opensearch.plugins.SecureSettingsFactory;
 import org.opensearch.plugins.SecureTransportSettingsProvider;
@@ -76,6 +80,41 @@ public class OpenSearchSecureSettingsFactory implements SecureSettingsFactory {
                     public boolean dualModeEnabled() {
                         return sslConfig.isDualModeEnabled();
                     }
+
+                    @Override
+                    public Optional<String> sslProvider() {
+                        return sslSettingsManager.sslConfiguration(CertType.HTTP).map(config -> config.sslParameters().provider().name());
+                    }
+
+                    @Override
+                    public Optional<String> clientAuth() {
+                        return sslSettingsManager.sslConfiguration(CertType.HTTP).map(config -> config.sslParameters().clientAuth().name());
+                    }
+
+                    @Override
+                    public Collection<String> protocols() {
+                        return sslSettingsManager.sslConfiguration(CertType.HTTP)
+                            .map(config -> config.sslParameters().allowedProtocols())
+                            .orElse(Collections.emptyList());
+                    }
+
+                    @Override
+                    public Collection<String> cipherSuites() {
+                        return sslSettingsManager.sslConfiguration(CertType.HTTP)
+                            .map(config -> config.sslParameters().allowedCiphers())
+                            .orElse(Collections.emptyList());
+                    }
+
+                    @Override
+                    public Optional<KeyManagerFactory> keyManagerFactory() {
+                        return sslSettingsManager.sslConfiguration(CertType.HTTP).map(SslConfiguration::keyStoreFactory);
+                    }
+
+                    @Override
+                    public Optional<TrustManagerFactory> trustManagerFactory() {
+                        return sslSettingsManager.sslConfiguration(CertType.HTTP).map(SslConfiguration::trustStoreFactory);
+                    }
+
                 });
             }
 
@@ -146,5 +185,10 @@ public class OpenSearchSecureSettingsFactory implements SecureSettingsFactory {
                 return sslSettingsManager.sslContextHandler(CertType.HTTP).map(SslContextHandler::createSSLEngine);
             }
         });
+    }
+
+    @Override
+    public Optional<SecureAuxTransportSettingsProvider> getSecureAuxTransportSettingsProvider(Settings settings) {
+        return Optional.empty();
     }
 }

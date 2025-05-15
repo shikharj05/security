@@ -51,18 +51,25 @@ import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.user.User;
 
 import static org.opensearch.core.xcontent.DeprecationHandler.THROW_UNSUPPORTED_OPERATION;
-import static org.opensearch.security.OpenSearchSecurityPlugin.LEGACY_OPENDISTRO_PREFIX;
-import static org.opensearch.security.OpenSearchSecurityPlugin.PLUGINS_PREFIX;
 
 public class Utils {
 
+    @Deprecated
+    public static final String LEGACY_OPENDISTRO_PREFIX = "_opendistro/_security";
+    public static final String PLUGINS_PREFIX = "_plugins/_security";
+
     public final static String PLUGIN_ROUTE_PREFIX = "/" + PLUGINS_PREFIX;
 
+    @Deprecated
     public final static String LEGACY_PLUGIN_ROUTE_PREFIX = "/" + LEGACY_OPENDISTRO_PREFIX;
 
     public final static String PLUGIN_API_ROUTE_PREFIX = PLUGIN_ROUTE_PREFIX + "/api";
 
+    @Deprecated
     public final static String LEGACY_PLUGIN_API_ROUTE_PREFIX = LEGACY_PLUGIN_ROUTE_PREFIX + "/api";
+
+    public final static String OPENDISTRO_API_DEPRECATION_MESSAGE =
+        "[_opendistro/_security] is a deprecated endpoint path. Please use _plugins/_security instead.";
 
     private static final ObjectMapper internalMapper = new ObjectMapper();
 
@@ -198,13 +205,23 @@ public class Utils {
     }
 
     /**
-     * Add prefixes(_opendistro... and _plugins...) to rest API routes
+     * Add prefixes(_plugins/_security/api) to rest API routes
      * @param routes routes
-     * @return new list of API routes prefixed with _opendistro... and _plugins...
-     *Total number of routes is expanded as twice as the number of routes passed in
+     * @return new list of API routes prefixed with and _plugins/_security/api
      */
     public static List<Route> addRoutesPrefix(List<Route> routes) {
-        return addRoutesPrefix(routes, LEGACY_PLUGIN_API_ROUTE_PREFIX, PLUGIN_API_ROUTE_PREFIX);
+        return addRoutesPrefix(routes, PLUGIN_API_ROUTE_PREFIX);
+    }
+
+    /**
+     * Add prefixes(_opendistro/_security/api) to rest API routes
+     * Deprecated in favor of addRoutesPrefix(List<Route> routes)
+     * @param routes routes
+     * @return new list of API routes prefixed with and _opendistro/_security/api
+     */
+    @Deprecated
+    public static List<DeprecatedRoute> addLegacyRoutesPrefix(List<DeprecatedRoute> routes) {
+        return addDeprecatedRoutesPrefix(routes, LEGACY_PLUGIN_API_ROUTE_PREFIX);
     }
 
     /**
