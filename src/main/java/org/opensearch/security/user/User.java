@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -333,6 +334,150 @@ public class User implements Serializable, CustomAttributesAware {
      */
     public int estimatedByteSize() {
         return this.estimatedByteSize;
+    }
+
+    /**
+     * Creates a User from a UserPrincipal and resolved authorization roles.
+     * This bridges the new plugin architecture with existing code.
+     * <p>
+     * <b>INTERNAL USE ONLY:</b> Used internally within a node - NOT for serialization between nodes.
+     * The User class remains the wire format for inter-node communication.
+     *
+     * @param principal The authenticated user principal containing identity and claims
+     * @param securityRoles The resolved security roles for authorization
+     * @return A User object constructed from the principal and security roles
+     * @throws IllegalArgumentException if principal is null
+     */
+    public static User fromPrincipal(UserPrincipal principal, java.util.Set<String> securityRoles) {
+        if (principal == null) {
+            throw new IllegalArgumentException("principal must not be null");
+        }
+
+        // Extract backend roles from claims
+        java.util.Set<String> backendRoles = extractBackendRoles(principal.getClaims());
+
+        // Convert claims to attributes (String -> String mapping)
+        Map<String, String> attributes = convertClaimsToAttributes(principal.getClaims());
+
+        return new User(
+            principal.getName(),
+            ImmutableSet.copyOf(backendRoles),
+            securityRoles != null ? ImmutableSet.copyOf(securityRoles) : ImmutableSet.of(),
+            null, // requestedTenant - not part of authentication, set separately if needed
+            ImmutableMap.copyOf(attributes),
+            false // isInjected - false for authenticated users
+        );
+    }
+
+    /**
+     * Creates a UserPrincipal from this User object.
+     * Used to convert from wire format to internal format.
+     * <p>
+     * <b>INTERNAL USE ONLY:</b> Used to convert User objects received from other nodes
+     * into UserPrincipal for processing with the new plugin architecture.
+     *
+     * @return A UserPrincipal containing this user's identity and claims
+     */
+    public UserPrincipal toPrincipal() {
+        Map<String, Object> claims = new HashMap<>();
+
+        // Add backend roles as a claim
+        if (!this.roles.isEmpty()) {
+            claims.put("backend_roles", new java.util.ArrayList<>(this.roles));
+        }
+
+        // Add all attributes as claims
+        claims.putAll(this.attributes);
+
+        return UserPrincipal.builder(this.name)
+            .claims(claims)
+            .authenticationType("legacy") // Mark as converted from legacy User object
+            .authenticationTime(System.currentTimeMillis())
+            .build();
+    }
+
+    /**
+     * Extracts backend roles from claims.
+     * Looks for common claim keys that represent roles/groups.
+     */
+    private static java.util.Set<String> extractBackendRoles(Map<String, Object> claims) {
+        java.util.Set<String> backendRoles = new HashSet<>();
+
+        if (claims == null) {
+            return backendRoles;
+        }
+
+        // Check for backend_roles claim (used in legacy conversion)
+        Object backendRolesClaim = claims.get("backend_roles");
+        if (backendRolesClaim instanceof Collection) {
+            for (Object role : (Collection<?>) backendRolesClaim) {
+                if (role != null) {
+                    backendRoles.add(role.toString());
+                }
+            }
+        }
+
+        // Check for groups claim (common in LDAP, OIDC)
+        Object groupsClaim = claims.get("groups");
+        if (groupsClaim instanceof Collection) {
+            for (Object group : (Collection<?>) groupsClaim) {
+                if (group != null) {
+                    backendRoles.add(group.toString());
+                }
+            }
+        }
+
+        // Check for roles claim (common in JWT, OIDC)
+        Object rolesClaim = claims.get("roles");
+        if (rolesClaim instanceof Collection) {
+            for (Object role : (Collection<?>) rolesClaim) {
+                if (role != null) {
+                    backendRoles.add(role.toString());
+                }
+            }
+        }
+
+        return backendRoles;
+    }
+
+    /**
+     * Converts claims (Object values) to attributes (String values).
+     * Only includes claims that can be represented as strings.
+     */
+    private static Map<String, String> convertClaimsToAttributes(Map<String, Object> claims) {
+        Map<String, String> attributes = new HashMap<>();
+
+        if (claims == null) {
+            return attributes;
+        }
+
+        for (Map.Entry<String, Object> entry : claims.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+
+            // Skip backend_roles, groups, and roles as they're handled separately
+            if ("backend_roles".equals(key) || "groups".equals(key) || "roles".equals(key)) {
+                continue;
+            }
+
+            // Convert value to string if possible
+            if (value != null) {
+                if (value instanceof String) {
+                    attributes.put(key, (String) value);
+                } else if (value instanceof Collection) {
+                    // Convert collections to comma-separated strings
+                    Collection<?> collection = (Collection<?>) value;
+                    if (!collection.isEmpty()) {
+                        attributes.put(key, String.join(",", collection.stream().map(Object::toString).toArray(String[]::new)));
+                    }
+                } else {
+                    // Convert other types to string representation
+                    attributes.put(key, value.toString());
+                }
+            }
+        }
+
+        return attributes;
     }
 
     private int calcEstimatedByteSize() {
