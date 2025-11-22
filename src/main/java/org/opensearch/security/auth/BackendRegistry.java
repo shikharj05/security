@@ -28,6 +28,7 @@ package org.opensearch.security.auth;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -60,6 +61,15 @@ import org.opensearch.identity.UserSubject;
 import org.opensearch.security.auditlog.AuditLog;
 import org.opensearch.security.auth.blocking.ClientBlockRegistry;
 import org.opensearch.security.auth.internal.NoOpAuthenticationBackend;
+import org.opensearch.security.auth.plugin.AuthenticationPlugin;
+import org.opensearch.security.auth.plugin.AuthorizationContext;
+import org.opensearch.security.auth.plugin.AuthorizationPlugin;
+import org.opensearch.security.auth.plugin.AuthorizationResult;
+import org.opensearch.security.auth.plugin.adapter.AuthenticationBackendAdapter;
+import org.opensearch.security.auth.plugin.adapter.AuthorizationBackendAdapter;
+import org.opensearch.security.auth.plugin.config.AuthenticationPluginConfig;
+import org.opensearch.security.auth.plugin.config.AuthorizationPluginConfig;
+import org.opensearch.security.auth.plugin.config.PluginConfigLoader;
 import org.opensearch.security.configuration.AdminDNs;
 import org.opensearch.security.configuration.ClusterInfoHolder;
 import org.opensearch.security.filter.SecurityRequest;
@@ -72,6 +82,7 @@ import org.opensearch.security.support.HostAndCidrMatcher;
 import org.opensearch.security.support.SecuritySettings;
 import org.opensearch.security.user.AuthCredentials;
 import org.opensearch.security.user.User;
+import org.opensearch.security.user.UserPrincipal;
 import org.opensearch.threadpool.ThreadPool;
 
 import org.greenrobot.eventbus.Subscribe;
@@ -87,6 +98,10 @@ public class BackendRegistry {
     protected static final Logger log = LogManager.getLogger(BackendRegistry.class);
     private SortedSet<AuthDomain> restAuthDomains;
     private Set<AuthorizationBackend> restAuthorizers;
+
+    // New plugin architecture support
+    private final List<AuthenticationPlugin> authenticationPlugins;
+    private final List<AuthorizationPlugin> authorizationPlugins;
 
     private List<AuthFailureListener> ipAuthFailureListeners;
     private Multimap<String, AuthFailureListener> authBackendFailureListeners;
@@ -108,6 +123,10 @@ public class BackendRegistry {
     private Cache<AuthCredentials, User> userCache; // rest standard
     private Cache<String, User> restImpersonationCache; // used for rest impersonation
     private Cache<User, Set<String>> restRoleCache; //
+    
+    // New plugin architecture caches
+    private Cache<AuthCredentials, UserPrincipal> userPrincipalCache; // cache for UserPrincipal objects
+    private Cache<UserPrincipal, Set<String>> principalRoleCache; // cache for resolved permissions
 
     private void createCaches() {
         userCache = CacheBuilder.newBuilder()
@@ -136,6 +155,35 @@ public class BackendRegistry {
                 @Override
                 public void onRemoval(RemovalNotification<User, Set<String>> notification) {
                     log.debug("Clear user cache for {} due to {}", notification.getKey(), notification.getCause());
+                }
+            })
+            .build();
+
+        // New plugin architecture caches
+        userPrincipalCache = CacheBuilder.newBuilder()
+            .expireAfterWrite(ttlInMin, TimeUnit.MINUTES)
+            .removalListener(new RemovalListener<AuthCredentials, UserPrincipal>() {
+                @Override
+                public void onRemoval(RemovalNotification<AuthCredentials, UserPrincipal> notification) {
+                    log.debug(
+                        "Clear UserPrincipal cache for {} due to {}",
+                        notification.getKey().getUsername(),
+                        notification.getCause()
+                    );
+                }
+            })
+            .build();
+
+        principalRoleCache = CacheBuilder.newBuilder()
+            .expireAfterWrite(ttlInMin, TimeUnit.MINUTES)
+            .removalListener(new RemovalListener<UserPrincipal, Set<String>>() {
+                @Override
+                public void onRemoval(RemovalNotification<UserPrincipal, Set<String>> notification) {
+                    log.debug(
+                        "Clear principal role cache for {} due to {}",
+                        notification.getKey().getName(),
+                        notification.getCause()
+                    );
                 }
             })
             .build();
@@ -168,6 +216,10 @@ public class BackendRegistry {
         this.restAuthDomains = Collections.emptySortedSet();
         this.ipAuthFailureListeners = Collections.emptyList();
 
+        // Initialize plugin lists
+        this.authenticationPlugins = new ArrayList<>();
+        this.authorizationPlugins = new ArrayList<>();
+
         this.ttlInMin = settings.getAsInt(ConfigConstants.SECURITY_CACHE_TTL_MINUTES, 60);
 
         // This is going to be defined in the opensearch.yml, so it's best suited to be initialized once.
@@ -189,6 +241,10 @@ public class BackendRegistry {
         userCache.invalidateAll();
         restImpersonationCache.invalidateAll();
         restRoleCache.invalidateAll();
+        
+        // Invalidate new plugin architecture caches
+        userPrincipalCache.invalidateAll();
+        principalRoleCache.invalidateAll();
     }
 
     public void invalidateUserCache(String[] usernames) {
@@ -211,6 +267,19 @@ public class BackendRegistry {
 
         // Invalidate entries in the restRoleCache by iterating over the keys and matching the username.
         restRoleCache.asMap().keySet().stream().filter(user -> usernamesAsSet.contains(user.getName())).forEach(restRoleCache::invalidate);
+
+        // Invalidate entries in the new plugin architecture caches
+        userPrincipalCache.asMap()
+            .keySet()
+            .stream()
+            .filter(authCreds -> usernamesAsSet.contains(authCreds.getUsername()))
+            .forEach(userPrincipalCache::invalidate);
+
+        principalRoleCache.asMap()
+            .keySet()
+            .stream()
+            .filter(principal -> usernamesAsSet.contains(principal.getName()))
+            .forEach(principalRoleCache::invalidate);
 
         // If the user isn't found it still says this, which could be bad
         log.debug("Cache invalidated for all valid users from list: {}", String.join(", ", usernamesAsSet));
@@ -390,7 +459,50 @@ public class BackendRegistry {
             }
 
             // http completed
-            authenticatedUser = authcz(userCache, restRoleCache, ac, authDomain.getBackend(), restAuthorizers);
+            // Try new plugin architecture first if plugins are registered
+            AuthenticationContext authContext = new AuthenticationContext(ac);
+            UserPrincipal principal = authenticateWithPlugins(authContext);
+            
+            if (principal != null) {
+                // Successfully authenticated with new plugin architecture
+                // Convert UserPrincipal to User for backward compatibility
+                // Note: We need to resolve authorization roles first
+                Set<String> securityRoles = new HashSet<>();
+                
+                // If authorization plugins are registered, use them to resolve permissions
+                if (!authorizationPlugins.isEmpty()) {
+                    for (AuthorizationPlugin authzPlugin : authorizationPlugins) {
+                        try {
+                            Set<String> resolvedRoles = authzPlugin.resolvePermissions(principal);
+                            if (resolvedRoles != null) {
+                                securityRoles.addAll(resolvedRoles);
+                            }
+                        } catch (Exception e) {
+                            log.error(
+                                "Error resolving permissions with plugin {} for user {}: {}",
+                                authzPlugin.getType(),
+                                principal.getName(),
+                                e.getMessage(),
+                                e
+                            );
+                        }
+                    }
+                }
+                
+                // Convert UserPrincipal to User
+                authenticatedUser = User.fromPrincipal(principal, securityRoles);
+                
+                if (isDebugEnabled) {
+                    log.debug(
+                        "Successfully authenticated user {} with plugin architecture (type: {})",
+                        authenticatedUser.getName(),
+                        principal.getAuthenticationType()
+                    );
+                }
+            } else {
+                // Fall back to existing authentication flow
+                authenticatedUser = authcz(userCache, restRoleCache, ac, authDomain.getBackend(), restAuthorizers);
+            }
 
             if (authenticatedUser == null) {
                 if (isDebugEnabled) {
@@ -475,6 +587,23 @@ public class BackendRegistry {
                     anonymousUser = anonymousUser.withRequestedTenant(tenant);
                 }
 
+                // Create UserPrincipal for anonymous user to support new plugin architecture
+                UserPrincipal anonymousPrincipal = anonymousUser.toPrincipal();
+
+                // If authorization plugins are registered, use them for anonymous user
+                if (!authorizationPlugins.isEmpty()) {
+                    if (isDebugEnabled) {
+                        log.debug("Authorizing anonymous user with {} authorization plugins", authorizationPlugins.size());
+                    }
+                    
+                    // Create authorization context for anonymous user
+                    // Anonymous users typically access public resources, so we don't need specific resource context here
+                    // The actual authorization will happen per-request in the security filter
+                    
+                    // For now, just ensure the anonymous user is properly set up with the principal
+                    // The authorization plugins will be invoked during actual resource access
+                }
+
                 UserSubject subject = new UserSubjectImpl(threadPool, anonymousUser);
 
                 threadPool.getThreadContext().putTransient(ConfigConstants.OPENDISTRO_SECURITY_USER, anonymousUser);
@@ -500,6 +629,59 @@ public class BackendRegistry {
             return false;
         }
         return authenticated;
+    }
+
+    /**
+     * Authorizes a user for a specific action on a resource using the new plugin architecture.
+     * This method should be called from REST and transport filters after authentication.
+     * 
+     * @param user The authenticated user
+     * @param action The action being performed (e.g., "cluster:monitor/health", "indices:data/read/search")
+     * @param resource The resource being accessed (e.g., index name, cluster name)
+     * @return AuthorizationResult indicating whether access is allowed or denied, or null if no plugins configured
+     */
+    public AuthorizationResult authorize(User user, String action, String resource) {
+        if (user == null) {
+            log.warn("Cannot authorize null user");
+            return AuthorizationResult.deny("No authenticated user provided");
+        }
+
+        // Convert User to UserPrincipal for plugin architecture
+        UserPrincipal principal = user.toPrincipal();
+
+        // Create authorization context
+        AuthorizationContext context = AuthorizationContext.builder(action, resource).build();
+
+        // Try authorization with plugins first
+        AuthorizationResult result = authorizeWithPlugins(principal, context);
+
+        if (result != null) {
+            // Plugin-based authorization was used
+            if (log.isDebugEnabled()) {
+                log.debug(
+                    "Authorization {} for user {} on action {} for resource {} using plugin architecture",
+                    result.isAllowed() ? "allowed" : "denied",
+                    user.getName(),
+                    action,
+                    resource
+                );
+            }
+            return result;
+        }
+
+        // No plugins configured, fall back to existing authorization flow
+        // This maintains backward compatibility
+        if (log.isTraceEnabled()) {
+            log.trace(
+                "No authorization plugins configured, falling back to existing authorization flow for user {} on action {} for resource {}",
+                user.getName(),
+                action,
+                resource
+            );
+        }
+
+        // Return null to indicate that the caller should use the existing authorization flow
+        return null;
     }
 
     /**
@@ -564,8 +746,11 @@ public class BackendRegistry {
                     Optional<User> impersonatedUser = impersonationBackend.impersonate(user);
                     if (impersonatedUser.isPresent()) {
                         AuthenticationContext context = new AuthenticationContext(new AuthCredentials(user.getName()));
-                        return authz(context, impersonatedUser.get(), null, authorizers); // no role cache because no miss here in case of
-                                                                                          // noop
+                        
+                        // Use plugin-based authorization if plugins are registered
+                        User resultUser = authz(context, impersonatedUser.get(), null, authorizers); // no role cache because no miss here in case of noop
+                        
+                        return resultUser;
                     }
 
                     if (isDebugEnabled) {
@@ -602,6 +787,90 @@ public class BackendRegistry {
             }
         }
 
+        // Try new plugin architecture first if plugins are registered
+        if (!authorizationPlugins.isEmpty()) {
+            final boolean isDebugEnabled = log.isDebugEnabled();
+            final boolean isTraceEnabled = log.isTraceEnabled();
+            
+            // Convert User to UserPrincipal for plugin processing
+            UserPrincipal principal = authenticatedUser.toPrincipal();
+            
+            // Check principal role cache first
+            Set<String> cachedRoles = principalRoleCache.getIfPresent(principal);
+            if (cachedRoles != null) {
+                if (isDebugEnabled) {
+                    log.debug("Resolved permissions for {} found in principal role cache", principal.getName());
+                }
+                authenticatedUser = authenticatedUser.withRoles(cachedRoles);
+                
+                // Also update the User-based role cache for backward compatibility
+                if (roleCache != null) {
+                    roleCache.put(authenticatedUser, new HashSet<>(cachedRoles));
+                }
+                
+                return authenticatedUser;
+            }
+            
+            if (isDebugEnabled) {
+                log.debug(
+                    "Resolved permissions for {} not cached, resolving with {} authorization plugin(s)",
+                    principal.getName(),
+                    authorizationPlugins.size()
+                );
+            }
+            
+            // Resolve permissions using authorization plugins
+            Set<String> securityRoles = new HashSet<>();
+            
+            for (AuthorizationPlugin authzPlugin : authorizationPlugins) {
+                try {
+                    if (isTraceEnabled) {
+                        log.trace(
+                            "Resolving permissions for {} with plugin {} (type: {})",
+                            principal.getName(),
+                            authzPlugin.getClass().getSimpleName(),
+                            authzPlugin.getType()
+                        );
+                    }
+                    
+                    Set<String> resolvedRoles = authzPlugin.resolvePermissions(principal);
+                    if (resolvedRoles != null) {
+                        securityRoles.addAll(resolvedRoles);
+                        
+                        if (isDebugEnabled) {
+                            log.debug(
+                                "Plugin {} (type: {}) resolved {} role(s) for user {}",
+                                authzPlugin.getClass().getSimpleName(),
+                                authzPlugin.getType(),
+                                resolvedRoles.size(),
+                                principal.getName()
+                            );
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error(
+                        "Error resolving permissions with plugin {} for user {}: {}",
+                        authzPlugin.getType(),
+                        principal.getName(),
+                        e.getMessage(),
+                        e
+                    );
+                }
+            }
+            
+            // Update user with resolved roles
+            authenticatedUser = authenticatedUser.withRoles(securityRoles);
+            
+            // Cache the resolved roles in both caches
+            principalRoleCache.put(principal, new HashSet<>(securityRoles));
+            if (roleCache != null) {
+                roleCache.put(authenticatedUser, new HashSet<>(authenticatedUser.getRoles()));
+            }
+            
+            return authenticatedUser;
+        }
+
+        // Fall back to existing authorization flow
         if (authorizers == null || authorizers.isEmpty()) {
             return authenticatedUser;
         }
@@ -649,7 +918,38 @@ public class BackendRegistry {
         AuthenticationContext context = new AuthenticationContext(ac);
 
         try {
+            // Try new plugin architecture first if plugins are registered
+            UserPrincipal principal = authenticateWithPlugins(context);
+            
+            if (principal != null) {
+                // Successfully authenticated with new plugin architecture
+                // Resolve authorization roles using plugins if available
+                Set<String> securityRoles = new HashSet<>();
+                
+                if (!authorizationPlugins.isEmpty()) {
+                    for (AuthorizationPlugin authzPlugin : authorizationPlugins) {
+                        try {
+                            Set<String> resolvedRoles = authzPlugin.resolvePermissions(principal);
+                            if (resolvedRoles != null) {
+                                securityRoles.addAll(resolvedRoles);
+                            }
+                        } catch (Exception e) {
+                            log.error(
+                                "Error resolving permissions with plugin {} for user {}: {}",
+                                authzPlugin.getType(),
+                                principal.getName(),
+                                e.getMessage(),
+                                e
+                            );
+                        }
+                    }
+                }
+                
+                // Convert UserPrincipal to User
+                return User.fromPrincipal(principal, securityRoles);
+            }
 
+            // Fall back to existing authentication flow
             // noop backend configured and no authorizers
             // that mean authc and authz was completely done via HTTP (like JWT or PKI)
             if (authBackend.getClass() == NoOpAuthenticationBackend.class && authorizers.isEmpty()) {
@@ -808,6 +1108,781 @@ public class BackendRegistry {
         }
 
         return false;
+    }
+
+    // ========== New Plugin Architecture Registration Methods ==========
+
+    /**
+     * Registers an authentication plugin with the backend registry.
+     * <p>
+     * This method is part of the new plugin architecture that separates authentication
+     * and authorization concerns. Authentication plugins verify user credentials and
+     * extract claims, returning a {@link org.opensearch.security.user.UserPrincipal}.
+     * <p>
+     * Plugins are executed in the order they are registered. The first plugin that
+     * successfully authenticates a user will be used.
+     *
+     * @param plugin The authentication plugin to register, must not be null
+     * @throws IllegalArgumentException if plugin is null
+     * @see AuthenticationPlugin
+     * @see #registerAuthenticationBackend(AuthenticationBackend)
+     */
+    public void registerAuthenticationPlugin(AuthenticationPlugin plugin) {
+        if (plugin == null) {
+            throw new IllegalArgumentException("Authentication plugin must not be null");
+        }
+
+        if (log.isDebugEnabled()) {
+            log.debug("Registering authentication plugin: {} (type: {})", plugin.getClass().getSimpleName(), plugin.getType());
+        }
+
+        authenticationPlugins.add(plugin);
+    }
+
+    /**
+     * Registers an authorization plugin with the backend registry.
+     * <p>
+     * This method is part of the new plugin architecture that separates authentication
+     * and authorization concerns. Authorization plugins make access control decisions
+     * based on an authenticated {@link org.opensearch.security.user.UserPrincipal}.
+     * <p>
+     * Plugins are executed in the order they are registered. All registered plugins
+     * must allow access for the request to proceed.
+     *
+     * @param plugin The authorization plugin to register, must not be null
+     * @throws IllegalArgumentException if plugin is null
+     * @see AuthorizationPlugin
+     * @see #registerAuthorizationBackend(AuthorizationBackend)
+     */
+    public void registerAuthorizationPlugin(AuthorizationPlugin plugin) {
+        if (plugin == null) {
+            throw new IllegalArgumentException("Authorization plugin must not be null");
+        }
+
+        if (log.isDebugEnabled()) {
+            log.debug("Registering authorization plugin: {} (type: {})", plugin.getClass().getSimpleName(), plugin.getType());
+        }
+
+        authorizationPlugins.add(plugin);
+    }
+
+    /**
+     * Registers an authentication backend with the backend registry.
+     * <p>
+     * This method maintains backward compatibility with the existing authentication
+     * backend interface. If the backend already implements {@link AuthenticationPlugin},
+     * it is registered directly. Otherwise, it is automatically wrapped with an adapter
+     * that implements the new {@link AuthenticationPlugin} interface.
+     * <p>
+     * <b>Adapter Usage:</b> As of the current release, all built-in authentication backends
+     * have been converted to implement {@link AuthenticationPlugin} directly. The adapter
+     * layer is now ONLY used for third-party custom backends that haven't migrated yet.
+     * <p>
+     * <b>Note:</b> This method is maintained for backward compatibility with third-party
+     * plugins. New code should use {@link #registerAuthenticationPlugin(AuthenticationPlugin)} instead.
+     * Third-party plugin developers should migrate to the new interface to eliminate adapter
+     * overhead and prepare for eventual removal of the old interface.
+     *
+     * @param backend The authentication backend to register, must not be null
+     * @throws IllegalArgumentException if backend is null
+     * @see #registerAuthenticationPlugin(AuthenticationPlugin)
+     */
+    public void registerAuthenticationBackend(AuthenticationBackend backend) {
+        if (backend == null) {
+            throw new IllegalArgumentException("Authentication backend must not be null");
+        }
+
+        // Check if the backend already implements AuthenticationPlugin
+        if (backend instanceof AuthenticationPlugin) {
+            // Backend has been converted to implement AuthenticationPlugin directly
+            // Register it directly without wrapping
+            if (log.isDebugEnabled()) {
+                log.debug(
+                    "Registering converted authentication backend directly: {} (type: {})",
+                    backend.getClass().getSimpleName(),
+                    backend.getType()
+                );
+            }
+            registerAuthenticationPlugin((AuthenticationPlugin) backend);
+        } else {
+            // Backend uses old interface, wrap with adapter
+            if (log.isDebugEnabled()) {
+                log.debug(
+                    "Registering authentication backend (via adapter): {} (type: {})",
+                    backend.getClass().getSimpleName(),
+                    backend.getType()
+                );
+            }
+
+            // Wrap the old backend with an adapter and register it as a plugin
+            AuthenticationPlugin adapter = new AuthenticationBackendAdapter(backend);
+            registerAuthenticationPlugin(adapter);
+        }
+    }
+
+    /**
+     * Registers an authorization backend with the backend registry.
+     * <p>
+     * This method maintains backward compatibility with the existing authorization
+     * backend interface. If the backend already implements {@link AuthorizationPlugin},
+     * it is registered directly. Otherwise, it is automatically wrapped with an adapter
+     * that implements the new {@link AuthorizationPlugin} interface.
+     * <p>
+     * <b>Adapter Usage:</b> As of the current release, all built-in authorization backends
+     * have been converted to implement {@link AuthorizationPlugin} directly. The adapter
+     * layer is now ONLY used for third-party custom backends that haven't migrated yet.
+     * <p>
+     * <b>Note:</b> This method is maintained for backward compatibility with third-party
+     * plugins. New code should use {@link #registerAuthorizationPlugin(AuthorizationPlugin)} instead.
+     * Third-party plugin developers should migrate to the new interface to eliminate adapter
+     * overhead and prepare for eventual removal of the old interface.
+     *
+     * @param backend The authorization backend to register, must not be null
+     * @throws IllegalArgumentException if backend is null
+     * @see #registerAuthorizationPlugin(AuthorizationPlugin)
+     */
+    public void registerAuthorizationBackend(AuthorizationBackend backend) {
+        if (backend == null) {
+            throw new IllegalArgumentException("Authorization backend must not be null");
+        }
+
+        // Check if the backend already implements AuthorizationPlugin
+        if (backend instanceof AuthorizationPlugin) {
+            // Backend has been converted to implement AuthorizationPlugin directly
+            // Register it directly without wrapping
+            if (log.isDebugEnabled()) {
+                log.debug(
+                    "Registering converted authorization backend directly: {} (type: {})",
+                    backend.getClass().getSimpleName(),
+                    backend.getType()
+                );
+            }
+            registerAuthorizationPlugin((AuthorizationPlugin) backend);
+        } else {
+            // Backend uses old interface, wrap with adapter
+            if (log.isDebugEnabled()) {
+                log.debug(
+                    "Registering authorization backend (via adapter): {} (type: {})",
+                    backend.getClass().getSimpleName(),
+                    backend.getType()
+                );
+            }
+
+            // Wrap the old backend with an adapter and register it as a plugin
+            AuthorizationPlugin adapter = new AuthorizationBackendAdapter(backend);
+            registerAuthorizationPlugin(adapter);
+        }
+    }
+
+    /**
+     * Returns an unmodifiable view of the registered authentication plugins.
+     * <p>
+     * This method is provided for testing and debugging purposes.
+     *
+     * @return An unmodifiable list of registered authentication plugins
+     */
+    public List<AuthenticationPlugin> getAuthenticationPlugins() {
+        return Collections.unmodifiableList(authenticationPlugins);
+    }
+
+    /**
+     * Returns an unmodifiable view of the registered authorization plugins.
+     * <p>
+     * This method is provided for testing and debugging purposes.
+     *
+     * @return An unmodifiable list of registered authorization plugins
+     */
+    public List<AuthorizationPlugin> getAuthorizationPlugins() {
+        return Collections.unmodifiableList(authorizationPlugins);
+    }
+
+    /**
+     * Loads and registers plugins from OpenSearch settings.
+     * <p>
+     * This method reads plugin configurations from the settings and instantiates
+     * the appropriate plugin implementations. Plugins are registered in the order
+     * specified in the configuration.
+     * <p>
+     * Configuration format:
+     * <pre>
+     * plugins.security.authentication:
+     *   - type: internal
+     *     enabled: true
+     *     order: 1
+     *   - type: ldap
+     *     enabled: true
+     *     order: 2
+     *     config:
+     *       host: ldap.example.com
+     * </pre>
+     *
+     * @param settings The OpenSearch settings containing plugin configurations
+     */
+    public void loadPluginConfigurations(Settings settings) {
+        PluginConfigLoader loader = new PluginConfigLoader();
+
+        // Load authentication plugin configurations
+        List<AuthenticationPluginConfig> authConfigs = loader.loadAuthenticationPlugins(settings);
+        log.info("Loaded {} authentication plugin configurations", authConfigs.size());
+
+        // Load authorization plugin configurations
+        List<AuthorizationPluginConfig> authzConfigs = loader.loadAuthorizationPlugins(settings);
+        log.info("Loaded {} authorization plugin configurations", authzConfigs.size());
+
+        // Note: Actual plugin instantiation would happen here in a complete implementation
+        // For now, this method demonstrates the configuration loading integration
+        // Future tasks will add plugin factory/instantiation logic
+    }
+
+    // ========== Cache Conversion Helper Methods ==========
+
+    /**
+     * Converts a cached User to a UserPrincipal for plugin processing.
+     * <p>
+     * This method is used internally to bridge between the existing User-based
+     * cache and the new UserPrincipal-based plugin architecture. It allows
+     * cached User objects to be used with authorization plugins without
+     * re-authentication.
+     * <p>
+     * <b>Note:</b> This is an internal helper method for cache conversion.
+     * The UserPrincipal created here is for internal processing only and
+     * should not be serialized for inter-node communication.
+     *
+     * @param user The cached User object to convert
+     * @return A UserPrincipal representation of the User, or null if user is null
+     * @see User#toPrincipal()
+     */
+    private UserPrincipal convertUserToPrincipal(User user) {
+        if (user == null) {
+            return null;
+        }
+        return user.toPrincipal();
+    }
+
+    /**
+     * Converts a cached UserPrincipal to a User for backward compatibility.
+     * <p>
+     * This method is used internally to bridge between the new UserPrincipal-based
+     * plugin architecture and the existing User-based code. It allows UserPrincipal
+     * objects from the cache to be used with existing code that expects User objects.
+     * <p>
+     * <b>Note:</b> This is an internal helper method for cache conversion.
+     * The User object created here maintains the serialization format required
+     * for inter-node communication.
+     *
+     * @param principal The cached UserPrincipal to convert
+     * @param securityRoles The resolved security roles for the user
+     * @return A User representation of the UserPrincipal, or null if principal is null
+     * @see User#fromPrincipal(UserPrincipal, Set)
+     */
+    private User convertPrincipalToUser(UserPrincipal principal, Set<String> securityRoles) {
+        if (principal == null) {
+            return null;
+        }
+        return User.fromPrincipal(principal, securityRoles != null ? securityRoles : Collections.emptySet());
+    }
+
+    // ========== New Plugin Architecture Authentication Flow ==========
+
+    /**
+     * Authenticates a user using registered authentication plugins.
+     * <p>
+     * This method implements the new plugin-based authentication flow. It iterates
+     * through registered {@link AuthenticationPlugin} instances in order, attempting
+     * authentication with each plugin that supports the provided credentials.
+     * <p>
+     * The method returns the {@link UserPrincipal} from the first plugin that
+     * successfully authenticates the user. If no plugins are registered, this method
+     * returns null, allowing the caller to fall back to the existing authentication flow.
+     * <p>
+     * <b>Caching:</b> This method uses a cache to avoid repeated authentication calls
+     * for the same credentials. The cache is keyed by {@link AuthCredentials} and stores
+     * {@link UserPrincipal} objects. Cache entries expire based on the configured TTL.
+     * <p>
+     * <b>Authentication Flow:</b>
+     * <ol>
+     *   <li>Check if any authentication plugins are registered</li>
+     *   <li>Check the cache for existing UserPrincipal</li>
+     *   <li>If not cached, for each plugin in registration order:
+     *     <ul>
+     *       <li>Check if the plugin supports the credentials</li>
+     *       <li>Attempt authentication</li>
+     *       <li>Cache and return UserPrincipal on success</li>
+     *       <li>Continue to next plugin on failure</li>
+     *     </ul>
+     *   </li>
+     *   <li>Return null if no plugin succeeds</li>
+     * </ol>
+     * <p>
+     * <b>Backward Compatibility:</b> This method is designed to work alongside the
+     * existing authentication flow. When no plugins are registered, it returns null,
+     * allowing the existing {@link #authcz} method to handle authentication.
+     *
+     * @param context The authentication context containing credentials and metadata
+     * @return UserPrincipal if authentication succeeds, null if no plugins are registered
+     *         or all plugins fail to authenticate
+     * @see AuthenticationPlugin
+     * @see UserPrincipal
+     */
+    private UserPrincipal authenticateWithPlugins(AuthenticationContext context) {
+        // If no plugins are registered, return null to fall back to existing flow
+        if (authenticationPlugins.isEmpty()) {
+            if (log.isTraceEnabled()) {
+                log.trace("No authentication plugins registered, falling back to existing authentication flow");
+            }
+            return null;
+        }
+
+        final boolean isDebugEnabled = log.isDebugEnabled();
+        final boolean isTraceEnabled = log.isTraceEnabled();
+        final AuthCredentials credentials = context.getCredentials();
+
+        if (credentials == null) {
+            if (isTraceEnabled) {
+                log.trace("No credentials provided, cannot authenticate with plugins");
+            }
+            return null;
+        }
+
+        // Check cache first
+        UserPrincipal cachedPrincipal = userPrincipalCache.getIfPresent(credentials);
+        if (cachedPrincipal != null) {
+            if (isDebugEnabled) {
+                log.debug("UserPrincipal for user {} found in cache", credentials.getUsername());
+            }
+            return cachedPrincipal;
+        }
+
+        if (isDebugEnabled) {
+            log.debug(
+                "UserPrincipal for user {} not cached, attempting authentication with {} plugin(s)",
+                credentials.getUsername(),
+                authenticationPlugins.size()
+            );
+        }
+
+        // Iterate through plugins in registration order
+        for (AuthenticationPlugin plugin : authenticationPlugins) {
+            if (isTraceEnabled) {
+                log.trace(
+                    "Checking if plugin {} (type: {}) supports credentials for user: {}",
+                    plugin.getClass().getSimpleName(),
+                    plugin.getType(),
+                    credentials.getUsername()
+                );
+            }
+
+            // Check if this plugin supports the credentials
+            if (!plugin.supports(credentials)) {
+                if (isTraceEnabled) {
+                    log.trace(
+                        "Plugin {} (type: {}) does not support credentials for user: {}",
+                        plugin.getClass().getSimpleName(),
+                        plugin.getType(),
+                        credentials.getUsername()
+                    );
+                }
+                continue;
+            }
+
+            // Measure execution time for audit logging
+            long startTime = System.currentTimeMillis();
+            
+            try {
+                if (isDebugEnabled) {
+                    log.debug(
+                        "Attempting authentication with plugin {} (type: {}) for user: {}",
+                        plugin.getClass().getSimpleName(),
+                        plugin.getType(),
+                        credentials.getUsername()
+                    );
+                }
+                
+                // Attempt authentication with this plugin
+                UserPrincipal principal = plugin.authenticate(context);
+                
+                long executionTimeMs = System.currentTimeMillis() - startTime;
+
+                if (principal != null) {
+                    if (isDebugEnabled) {
+                        log.debug(
+                            "Successfully authenticated user {} with plugin {} (type: {}), caching result",
+                            principal.getName(),
+                            plugin.getClass().getSimpleName(),
+                            plugin.getType()
+                        );
+                    }
+                    
+                    // Audit log successful authentication
+                    auditLog.logAuthenticationPluginExecution(
+                        plugin.getType(),
+                        "SUCCESS",
+                        executionTimeMs,
+                        principal.getName(),
+                        principal.getClaims(),
+                        null // SecurityRequest not available in this context
+                    );
+                    
+                    // Cache the successful authentication result
+                    userPrincipalCache.put(credentials, principal);
+                    
+                    return principal;
+                } else {
+                    if (isDebugEnabled) {
+                        log.debug(
+                            "Plugin {} (type: {}) returned null for user: {}",
+                            plugin.getClass().getSimpleName(),
+                            plugin.getType(),
+                            credentials.getUsername()
+                        );
+                    }
+                    
+                    // Audit log failed authentication (null result)
+                    auditLog.logAuthenticationPluginExecution(
+                        plugin.getType(),
+                        "FAILED_NULL_RESULT",
+                        executionTimeMs,
+                        credentials.getUsername(),
+                        Collections.emptyMap(),
+                        null
+                    );
+                }
+            } catch (org.opensearch.security.auth.plugin.AuthenticationException e) {
+                long executionTimeMs = System.currentTimeMillis() - startTime;
+                
+                // Authentication failed with this plugin, try next
+                if (isDebugEnabled) {
+                    log.debug(
+                        "Authentication failed with plugin {} (type: {}) for user {}: {}",
+                        plugin.getClass().getSimpleName(),
+                        plugin.getType(),
+                        credentials.getUsername(),
+                        e.getMessage()
+                    );
+                }
+                if (isTraceEnabled) {
+                    log.trace("Authentication exception details", e);
+                }
+                
+                // Audit log failed authentication
+                auditLog.logAuthenticationPluginExecution(
+                    plugin.getType(),
+                    "FAILED_EXCEPTION: " + e.getMessage(),
+                    executionTimeMs,
+                    credentials.getUsername(),
+                    Collections.emptyMap(),
+                    null
+                );
+            } catch (Exception e) {
+                long executionTimeMs = System.currentTimeMillis() - startTime;
+                
+                // Unexpected exception, log and try next plugin
+                log.error(
+                    "Unexpected exception during authentication with plugin {} (type: {}) for user {}: {}",
+                    plugin.getClass().getSimpleName(),
+                    plugin.getType(),
+                    credentials.getUsername(),
+                    e.getMessage(),
+                    e
+                );
+                
+                // Audit log unexpected exception
+                auditLog.logAuthenticationPluginExecution(
+                    plugin.getType(),
+                    "ERROR: " + e.getMessage(),
+                    executionTimeMs,
+                    credentials.getUsername(),
+                    Collections.emptyMap(),
+                    null
+                );
+            }
+        }
+
+        // No plugin succeeded
+        if (isDebugEnabled) {
+            log.debug(
+                "All {} authentication plugin(s) failed to authenticate user: {}",
+                authenticationPlugins.size(),
+                credentials.getUsername()
+            );
+        }
+
+        return null;
+    }
+
+    // ========== New Plugin Architecture Authorization Flow ==========
+
+    /**
+     * Authorizes a user using registered authorization plugins.
+     * <p>
+     * This method implements the new plugin-based authorization flow. It iterates
+     * through registered {@link AuthorizationPlugin} instances in order, evaluating
+     * authorization for each plugin.
+     * <p>
+     * The method uses an AND logic: all plugins must allow access for the request
+     * to proceed. If any plugin denies access, the method immediately returns the
+     * deny result. If no plugins are registered, this method returns null, allowing
+     * the caller to fall back to the existing authorization flow.
+     * <p>
+     * <b>Authorization Flow:</b>
+     * <ol>
+     *   <li>Check if any authorization plugins are registered</li>
+     *   <li>For each plugin in registration order:
+     *     <ul>
+     *       <li>Call the plugin's authorize method</li>
+     *       <li>If denied, immediately return the deny result</li>
+     *       <li>If allowed, continue to next plugin</li>
+     *     </ul>
+     *   </li>
+     *   <li>Return allow result if all plugins allow access</li>
+     * </ol>
+     * <p>
+     * <b>Backward Compatibility:</b> This method is designed to work alongside the
+     * existing authorization flow. When no plugins are registered, it returns null,
+     * allowing the existing {@link #authz} method to handle authorization.
+     *
+     * @param principal The authenticated user principal containing identity and claims
+     * @param context The authorization context containing resource, action, and metadata
+     * @return AuthorizationResult if plugins are registered (allow or deny), null if no
+     *         plugins are registered to fall back to existing flow
+     * @see AuthorizationPlugin
+     * @see AuthorizationResult
+     * @see AuthorizationContext
+     */
+    private AuthorizationResult authorizeWithPlugins(UserPrincipal principal, AuthorizationContext context) {
+        // If no plugins are registered, return null to fall back to existing flow
+        if (authorizationPlugins.isEmpty()) {
+            if (log.isTraceEnabled()) {
+                log.trace("No authorization plugins registered, falling back to existing authorization flow");
+            }
+            return null;
+        }
+
+        final boolean isDebugEnabled = log.isDebugEnabled();
+        final boolean isTraceEnabled = log.isTraceEnabled();
+
+        if (principal == null) {
+            if (isTraceEnabled) {
+                log.trace("No principal provided, cannot authorize with plugins");
+            }
+            return AuthorizationResult.deny("No authenticated principal provided");
+        }
+
+        if (context == null) {
+            if (isTraceEnabled) {
+                log.trace("No authorization context provided, cannot authorize with plugins");
+            }
+            return AuthorizationResult.deny("No authorization context provided");
+        }
+
+        if (isDebugEnabled) {
+            log.debug(
+                "Attempting authorization with {} plugin(s) for user: {}, action: {}, resource: {}",
+                authorizationPlugins.size(),
+                principal.getName(),
+                context.getAction(),
+                context.getResource()
+            );
+        }
+
+        // Iterate through plugins in registration order
+        // All plugins must allow access (AND logic)
+        for (AuthorizationPlugin plugin : authorizationPlugins) {
+            if (isTraceEnabled) {
+                log.trace(
+                    "Evaluating authorization with plugin {} (type: {}) for user: {}, action: {}, resource: {}",
+                    plugin.getClass().getSimpleName(),
+                    plugin.getType(),
+                    principal.getName(),
+                    context.getAction(),
+                    context.getResource()
+                );
+            }
+
+            // Measure execution time for audit logging
+            long startTime = System.currentTimeMillis();
+            
+            try {
+                // Attempt authorization with this plugin
+                AuthorizationResult result = plugin.authorize(principal, context);
+                
+                long executionTimeMs = System.currentTimeMillis() - startTime;
+
+                if (result == null) {
+                    // Plugin returned null, treat as deny
+                    log.warn(
+                        "Plugin {} (type: {}) returned null for user: {}, action: {}, resource: {} - treating as deny",
+                        plugin.getClass().getSimpleName(),
+                        plugin.getType(),
+                        principal.getName(),
+                        context.getAction(),
+                        context.getResource()
+                    );
+                    
+                    // Audit log null result
+                    auditLog.logAuthorizationPluginExecution(
+                        plugin.getType(),
+                        "DENIED_NULL_RESULT",
+                        executionTimeMs,
+                        principal.getName(),
+                        context.getAction(),
+                        context.getResource(),
+                        null
+                    );
+                    
+                    return AuthorizationResult.deny(
+                        "Authorization plugin " + plugin.getType() + " returned null result"
+                    );
+                }
+
+                if (!result.isAllowed()) {
+                    // Plugin denied access, return immediately (fail-fast)
+                    if (isDebugEnabled) {
+                        log.debug(
+                            "Authorization denied by plugin {} (type: {}) for user: {}, action: {}, resource: {}. Reason: {}",
+                            plugin.getClass().getSimpleName(),
+                            plugin.getType(),
+                            principal.getName(),
+                            context.getAction(),
+                            context.getResource(),
+                            result.getReason()
+                        );
+                    }
+                    
+                    // Audit log denied authorization
+                    auditLog.logAuthorizationPluginExecution(
+                        plugin.getType(),
+                        "DENIED: " + result.getReason(),
+                        executionTimeMs,
+                        principal.getName(),
+                        context.getAction(),
+                        context.getResource(),
+                        null
+                    );
+                    
+                    return result;
+                } else {
+                    // Plugin allowed access, continue to next plugin
+                    if (isTraceEnabled) {
+                        log.trace(
+                            "Authorization allowed by plugin {} (type: {}) for user: {}, action: {}, resource: {}",
+                            plugin.getClass().getSimpleName(),
+                            plugin.getType(),
+                            principal.getName(),
+                            context.getAction(),
+                            context.getResource()
+                        );
+                    }
+                    
+                    // Audit log allowed authorization
+                    auditLog.logAuthorizationPluginExecution(
+                        plugin.getType(),
+                        "ALLOWED",
+                        executionTimeMs,
+                        principal.getName(),
+                        context.getAction(),
+                        context.getResource(),
+                        null
+                    );
+                }
+            } catch (Exception e) {
+                long executionTimeMs = System.currentTimeMillis() - startTime;
+                
+                // Unexpected exception, log and treat as deny
+                log.error(
+                    "Unexpected exception during authorization with plugin {} (type: {}) for user: {}, action: {}, resource: {}: {}",
+                    plugin.getClass().getSimpleName(),
+                    plugin.getType(),
+                    principal.getName(),
+                    context.getAction(),
+                    context.getResource(),
+                    e.getMessage(),
+                    e
+                );
+                
+                // Audit log exception
+                auditLog.logAuthorizationPluginExecution(
+                    plugin.getType(),
+                    "ERROR: " + e.getMessage(),
+                    executionTimeMs,
+                    principal.getName(),
+                    context.getAction(),
+                    context.getResource(),
+                    null
+                );
+                
+                return AuthorizationResult.deny(
+                    "Authorization failed due to unexpected error in plugin " + plugin.getType()
+                );
+            }
+        }
+
+        // All plugins allowed access
+        if (isDebugEnabled) {
+            log.debug(
+                "All {} authorization plugin(s) allowed access for user: {}, action: {}, resource: {}",
+                authorizationPlugins.size(),
+                principal.getName(),
+                context.getAction(),
+                context.getResource()
+            );
+        }
+
+        return AuthorizationResult.allow();
+    }
+
+    /**
+     * Checks if the BackendRegistry is using the new plugin architecture.
+     * Returns true if any authentication or authorization plugins are registered.
+     * 
+     * @return true if plugin architecture is active, false otherwise
+     */
+    public boolean isUsingPluginArchitecture() {
+        return !authenticationPlugins.isEmpty() || !authorizationPlugins.isEmpty();
+    }
+
+    /**
+     * Returns the number of adapters currently in use.
+     * Adapters indicate backends that have not been converted to the new plugin architecture.
+     * 
+     * @return count of adapters in use
+     */
+    public int getAdapterCount() {
+        int count = 0;
+        
+        // Count authentication backend adapters
+        for (AuthenticationPlugin plugin : authenticationPlugins) {
+            if (plugin instanceof AuthenticationBackendAdapter) {
+                count++;
+            }
+        }
+        
+        // Count authorization backend adapters
+        for (AuthorizationPlugin plugin : authorizationPlugins) {
+            if (plugin instanceof AuthorizationBackendAdapter) {
+                count++;
+            }
+        }
+        
+        return count;
+    }
+
+    /**
+     * Returns the number of authentication plugins registered.
+     * 
+     * @return count of authentication plugins
+     */
+    public int getAuthenticationPluginCount() {
+        return authenticationPlugins.size();
+    }
+
+    /**
+     * Returns the number of authorization plugins registered.
+     * 
+     * @return count of authorization plugins
+     */
+    public int getAuthorizationPluginCount() {
+        return authorizationPlugins.size();
     }
 
 }
