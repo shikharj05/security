@@ -68,6 +68,7 @@ import org.opensearch.security.support.Base64Helper;
 import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.user.User;
 import org.opensearch.security.user.UserFactory;
+import org.opensearch.security.user.UserPrincipal;
 import org.opensearch.tasks.Task;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.Transport.Connection;
@@ -148,7 +149,13 @@ public class SecurityInterceptor {
         DiscoveryNode localNode
     ) {
         final Map<String, String> origHeaders0 = getThreadContext().getHeaders();
+        
+        // Get User from thread context (may be null)
         final User user0 = getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_USER);
+        
+        // Get UserPrincipal from thread context if present (internal plugin architecture)
+        final UserPrincipal userPrincipal0 = getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_USER_PRINCIPAL);
+        
         final String injectedUserString = getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_INJECTED_USER);
         final String injectedRolesString = getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_INJECTED_ROLES);
         final String injectedRolesValidationString = getThreadContext().getTransient(
@@ -164,6 +171,11 @@ public class SecurityInterceptor {
         final UserSubjectImpl authUserSubj = (UserSubjectImpl) getThreadContext().getPersistent(
             ConfigConstants.OPENDISTRO_SECURITY_AUTHENTICATED_USER
         );
+        
+        // Convert UserPrincipal to User for serialization if needed
+        // CRITICAL: UserPrincipal is internal only, User is used for inter-node communication
+        final User userForSerialization = (user0 != null) ? user0 : 
+            (userPrincipal0 != null) ? User.fromPrincipal(userPrincipal0, java.util.Collections.emptySet()) : null;
 
         final boolean isDebugEnabled = log.isDebugEnabled();
         final boolean isStreamChannel = options != null && TransportRequestOptions.Type.STREAM.equals(options.type());
@@ -263,7 +275,7 @@ public class SecurityInterceptor {
 
             getThreadContext().putHeader(headerMap);
 
-            ensureCorrectHeaders(remoteAddress0, user0, authUserSubj, origin0, injectedUserString, injectedRolesString, isSameNodeRequest);
+            ensureCorrectHeaders(remoteAddress0, userForSerialization, authUserSubj, origin0, injectedUserString, injectedRolesString, isSameNodeRequest);
 
             if (actionTraceEnabled.get()) {
                 getThreadContext().putHeader(

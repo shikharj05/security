@@ -57,6 +57,7 @@ import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.support.HeaderHelper;
 import org.opensearch.security.user.User;
 import org.opensearch.security.user.UserFactory;
+import org.opensearch.security.user.UserPrincipal;
 import org.opensearch.security.util.ParentChildrenQueryDetector;
 import org.opensearch.tasks.Task;
 import org.opensearch.threadpool.ThreadPool;
@@ -152,6 +153,7 @@ public class SecurityRequestHandler<T extends TransportRequest> extends Security
 
             // bypass non-netty requests
             if (getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_USER) != null
+                || getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_USER_PRINCIPAL) != null
                 || getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_INJECTED_USER) != null
                 || getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_INJECTED_ROLES) != null
                 || getThreadContext().getTransient(ConfigConstants.OPENDISTRO_SECURITY_REMOTE_ADDRESS) != null) {
@@ -214,7 +216,14 @@ public class SecurityRequestHandler<T extends TransportRequest> extends Security
                     }
                 } else {
                     user = user != null ? user : this.userFactory.fromSerializedBase64(userHeader);
+                    
+                    // Put User in thread context for backward compatibility
                     getThreadContext().putTransient(ConfigConstants.OPENDISTRO_SECURITY_USER, user);
+                    
+                    // Convert User to UserPrincipal for internal plugin architecture
+                    // CRITICAL: User is deserialized from wire format, UserPrincipal is internal only
+                    UserPrincipal userPrincipal = user.toPrincipal();
+                    getThreadContext().putTransient(ConfigConstants.OPENDISTRO_SECURITY_USER_PRINCIPAL, userPrincipal);
                 }
 
                 String originalRemoteAddress = getThreadContext().getHeader(ConfigConstants.OPENDISTRO_SECURITY_REMOTE_ADDRESS_HEADER);
