@@ -282,32 +282,67 @@ public class SecurityRestFilter {
             .findFirst();
         final boolean routeSupportsRestAuthorization = handler.isPresent() && handler.get() instanceof NamedRoute;
         if (routeSupportsRestAuthorization) {
-            PrivilegesEvaluatorResponse pres = new PrivilegesEvaluatorResponse();
             NamedRoute route = ((NamedRoute) handler.get());
             // Check both route.actionNames() and route.name(). The presence of either is sufficient.
             Set<String> actionNames = ImmutableSet.<String>builder()
                 .addAll(route.actionNames() != null ? route.actionNames() : Collections.emptySet())
                 .add(route.name())
                 .build();
-            pres = evaluator.evaluate(user, route.name(), actionNames);
 
-            if (log.isDebugEnabled()) {
-                log.debug(pres.toString());
-            }
-            if (pres.isAllowed()) {
-                log.debug("Request has been granted");
-                auditLog.logGrantedPrivileges(user.getName(), request);
-            } else {
-                auditLog.logMissingPrivileges(route.name(), user.getName(), request);
-                String err;
-                if (!pres.getMissingSecurityRoles().isEmpty()) {
-                    err = String.format("No mapping for %s on roles %s", user, pres.getMissingSecurityRoles());
-                } else {
-                    err = String.format("no permissions for %s and %s", pres.getMissingPrivileges(), user);
+            // Try authorization with new plugin architecture first
+            // Use the route name as the action and path as the resource
+            org.opensearch.security.auth.plugin.AuthorizationResult pluginResult = registry.authorize(
+                user,
+                route.name(),
+                request.path()
+            );
+
+            if (pluginResult != null) {
+                // Plugin-based authorization was used
+                if (log.isDebugEnabled()) {
+                    log.debug("Using plugin-based authorization for route: {}, user: {}", route.name(), user.getName());
                 }
-                log.debug(err);
 
-                request.queueForSending(new SecurityResponse(HttpStatus.SC_UNAUTHORIZED, err));
+                if (pluginResult.isAllowed()) {
+                    log.debug("Request has been granted by authorization plugins");
+                    auditLog.logGrantedPrivileges(user.getName(), request);
+                } else {
+                    auditLog.logMissingPrivileges(route.name(), user.getName(), request);
+                    String err = String.format(
+                        "Authorization denied for user %s on route %s. Reason: %s",
+                        user.getName(),
+                        route.name(),
+                        pluginResult.getReason()
+                    );
+                    log.debug(err);
+                    request.queueForSending(new SecurityResponse(HttpStatus.SC_UNAUTHORIZED, err));
+                }
+            } else {
+                // Fall back to existing authorization flow
+                if (log.isDebugEnabled()) {
+                    log.debug("Using existing authorization flow for route: {}, user: {}", route.name(), user.getName());
+                }
+
+                PrivilegesEvaluatorResponse pres = evaluator.evaluate(user, route.name(), actionNames);
+
+                if (log.isDebugEnabled()) {
+                    log.debug(pres.toString());
+                }
+                if (pres.isAllowed()) {
+                    log.debug("Request has been granted");
+                    auditLog.logGrantedPrivileges(user.getName(), request);
+                } else {
+                    auditLog.logMissingPrivileges(route.name(), user.getName(), request);
+                    String err;
+                    if (!pres.getMissingSecurityRoles().isEmpty()) {
+                        err = String.format("No mapping for %s on roles %s", user, pres.getMissingSecurityRoles());
+                    } else {
+                        err = String.format("no permissions for %s and %s", pres.getMissingPrivileges(), user);
+                    }
+                    log.debug(err);
+
+                    request.queueForSending(new SecurityResponse(HttpStatus.SC_UNAUTHORIZED, err));
+                }
             }
         }
     }
