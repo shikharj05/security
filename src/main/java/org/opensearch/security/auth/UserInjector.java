@@ -28,6 +28,7 @@ package org.opensearch.security.auth;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -45,6 +46,7 @@ import org.opensearch.security.filter.SecurityRequestChannel;
 import org.opensearch.security.http.XFFResolver;
 import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.user.User;
+import org.opensearch.security.user.UserPrincipal;
 import org.opensearch.threadpool.ThreadPool;
 
 public class UserInjector {
@@ -129,13 +131,36 @@ public class UserInjector {
             }
         }
 
+        // Create UserPrincipal for injected user
+        Map<String, Object> claims = new HashMap<>();
+        
+        // Add backend roles as a claim
+        if (!backendRoles.isEmpty()) {
+            claims.put("backend_roles", new ArrayList<>(backendRoles));
+        }
+        
+        // Add custom attributes as claims
+        claims.putAll(customAttributes);
+        
+        // Mark as injected user in claims
+        claims.put("injected", true);
+        
+        UserPrincipal principal = UserPrincipal.builder(userName)
+            .claims(claims)
+            .authenticationType("injected")
+            .authenticationTime(System.currentTimeMillis())
+            .build();
+        
+        // Create User object from principal for backward compatibility
+        // The User object is marked as injected (isInjected=true)
         User injectedUser = new User(userName, backendRoles, ImmutableSet.of(), requestedTenant, customAttributes, true);
 
         if (log.isTraceEnabled()) {
             log.trace("Injected user object:{} ", injectedUser.toString());
+            log.trace("Injected user principal:{} ", principal.toString());
         }
 
-        return new Result(injectedUser, transportAddress);
+        return new Result(injectedUser, principal, transportAddress);
     }
 
     public TransportAddress parseTransportAddress(String addr) throws UnknownHostException, IllegalArgumentException {
@@ -193,15 +218,21 @@ public class UserInjector {
 
     public static class Result {
         private final User user;
+        private final UserPrincipal principal;
         private final TransportAddress transportAddress;
 
-        public Result(User user, TransportAddress transportAddress) {
+        public Result(User user, UserPrincipal principal, TransportAddress transportAddress) {
             this.user = user;
+            this.principal = principal;
             this.transportAddress = transportAddress;
         }
 
         public User getUser() {
             return user;
+        }
+
+        public UserPrincipal getPrincipal() {
+            return principal;
         }
 
         public TransportAddress getTransportAddress() {

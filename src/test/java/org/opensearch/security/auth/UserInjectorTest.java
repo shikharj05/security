@@ -62,6 +62,16 @@ public class UserInjectorTest {
         UserInjector.Result injectedUser = userInjector.getInjectedUser();
         assertThat("user", is(injectedUser.getUser().getName()));
         assertThat(roles, is(injectedUser.getUser().getRoles()));
+        
+        // Verify UserPrincipal is created
+        assertNotNull("UserPrincipal should be created", injectedUser.getPrincipal());
+        assertThat("user", is(injectedUser.getPrincipal().getName()));
+        assertThat("injected", is(injectedUser.getPrincipal().getAuthenticationType()));
+        
+        // Verify claims contain backend roles
+        Map<String, Object> claims = injectedUser.getPrincipal().getClaims();
+        assertNotNull("Claims should not be null", claims);
+        assertThat(true, is(claims.get("injected")));
     }
 
     @Test
@@ -76,6 +86,10 @@ public class UserInjectorTest {
         assertThat(injectedUser.getUser().getName(), is("user"));
         assertThat(injectedUser.getTransportAddress().getPort(), is(9200));
         assertThat(injectedUser.getTransportAddress().getAddress(), is("2001:db8:3333:4444:5555:6666:7777:8888"));
+        
+        // Verify UserPrincipal is created
+        assertNotNull("UserPrincipal should be created", injectedUser.getPrincipal());
+        assertThat("user", is(injectedUser.getPrincipal().getName()));
     }
 
     @Test
@@ -114,6 +128,10 @@ public class UserInjectorTest {
         assertThat(injectedUser.getUser().getRoles(), is(roles));
         assertThat(injectedUser.getTransportAddress().getPort(), is(9200));
         assertThat(injectedUser.getTransportAddress().getAddress(), is("2001:db8:3333:4444:5555:6666:7777:8888"));
+        
+        // Verify UserPrincipal is created
+        assertNotNull("UserPrincipal should be created", injectedUser.getPrincipal());
+        assertThat("user", is(injectedUser.getPrincipal().getName()));
     }
 
     @Test
@@ -158,6 +176,64 @@ public class UserInjectorTest {
         assertThat(map.get("key1"), is("value1"));
         assertThat(map.get("key2"), is("value2"));
 
+    }
+
+    @Test
+    public void testInjectedUserWithCustomAttributes() {
+        threadContext.putTransient(
+            ConfigConstants.OPENDISTRO_SECURITY_INJECTED_USER,
+            "user|role1,role2||attr1,value1,attr2,value2"
+        );
+        UserInjector.Result injectedUser = userInjector.getInjectedUser();
+        
+        assertNotNull("Injected user should not be null", injectedUser);
+        assertThat("user", is(injectedUser.getUser().getName()));
+        
+        // Verify User has custom attributes
+        Map<String, String> userAttributes = injectedUser.getUser().getCustomAttributesMap();
+        assertThat(2, is(userAttributes.size()));
+        assertThat("value1", is(userAttributes.get("attr1")));
+        assertThat("value2", is(userAttributes.get("attr2")));
+        
+        // Verify UserPrincipal has custom attributes in claims
+        assertNotNull("UserPrincipal should be created", injectedUser.getPrincipal());
+        Map<String, Object> claims = injectedUser.getPrincipal().getClaims();
+        assertThat("value1", is(claims.get("attr1")));
+        assertThat("value2", is(claims.get("attr2")));
+    }
+
+    @Test
+    public void testInjectedUserMarkedAsInjected() {
+        threadContext.putTransient(ConfigConstants.OPENDISTRO_SECURITY_INJECTED_USER, "testuser|admin");
+        UserInjector.Result injectedUser = userInjector.getInjectedUser();
+        
+        assertNotNull("Injected user should not be null", injectedUser);
+        
+        // Verify User is marked as injected
+        assertThat(true, is(injectedUser.getUser().isInjected()));
+        
+        // Verify UserPrincipal has injected claim
+        assertNotNull("UserPrincipal should be created", injectedUser.getPrincipal());
+        Map<String, Object> claims = injectedUser.getPrincipal().getClaims();
+        assertThat(true, is(claims.get("injected")));
+        assertThat("injected", is(injectedUser.getPrincipal().getAuthenticationType()));
+    }
+
+    @Test
+    public void testInjectedUserWithRequestedTenant() {
+        threadContext.putTransient(
+            ConfigConstants.OPENDISTRO_SECURITY_INJECTED_USER,
+            "user|role1,role2|||my_tenant"
+        );
+        UserInjector.Result injectedUser = userInjector.getInjectedUser();
+        
+        assertNotNull("Injected user should not be null", injectedUser);
+        assertThat("user", is(injectedUser.getUser().getName()));
+        assertThat("my_tenant", is(injectedUser.getUser().getRequestedTenant()));
+        
+        // Verify UserPrincipal is created
+        assertNotNull("UserPrincipal should be created", injectedUser.getPrincipal());
+        assertThat("user", is(injectedUser.getPrincipal().getName()));
     }
 
 }
