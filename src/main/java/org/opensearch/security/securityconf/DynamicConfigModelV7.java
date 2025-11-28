@@ -301,7 +301,29 @@ public class DynamicConfigModelV7 extends DynamicConfigModel {
                     if (authBackendClazz.equals(InternalAuthenticationBackend.class.getName()) // NOSONAR
                         || authBackendClazz.equals("internal")
                         || authBackendClazz.equals("intern")) {
-                        authenticationBackend = iab;
+                        // Create a bridge adapter for InternalAuthenticationBackend
+                        // since it now implements AuthenticationPlugin instead of AuthenticationBackend
+                        authenticationBackend = new AuthenticationBackend() {
+                            @Override
+                            public String getType() {
+                                return iab.getType();
+                            }
+
+                            @Override
+                            public org.opensearch.security.user.User authenticate(
+                                org.opensearch.security.auth.AuthenticationContext context
+                            ) throws org.opensearch.OpenSearchSecurityException {
+                                try {
+                                    org.opensearch.security.user.UserPrincipal principal = iab.authenticate(context);
+                                    return org.opensearch.security.user.User.fromPrincipal(
+                                        principal,
+                                        java.util.Collections.emptySet()
+                                    );
+                                } catch (org.opensearch.security.auth.plugin.AuthenticationException e) {
+                                    throw new org.opensearch.OpenSearchSecurityException(e.getMessage(), e);
+                                }
+                            }
+                        };
                         ReflectionHelper.addLoadedModule(InternalAuthenticationBackend.class);
                     } else {
                         authenticationBackend = newInstance(

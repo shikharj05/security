@@ -1,0 +1,216 @@
+---
+# OpenSearch Security Configuration - Migration Example
+#
+# This file demonstrates how to migrate from the legacy authentication/authorization
+# backend format to the new plugin architecture format.
+#
+# BOTH FORMATS CAN COEXIST during migration for a smooth transition.
+
+_meta:
+  type: "config"
+  config_version: 2
+
+config:
+  dynamic:
+    http:
+      anonymous_auth_enabled: false
+    
+    # ============================================================================
+    # STEP 1: LEGACY FORMAT (currently in use)
+    # ============================================================================
+    # This is the existing configuration that works today.
+    # It will continue to work and is automatically converted to the new format internally.
+    
+    authc:
+      basic_internal_auth_domain:
+        description: "Authenticate via HTTP Basic against internal users database"
+        http_enabled: true
+        transport_enabled: true
+        order: 1
+        http_authenticator:
+          type: basic
+          challenge: true
+        authentication_backend:
+          type: intern
+      
+      ldap_auth_domain:
+        description: "Authenticate via LDAP"
+        http_enabled: true
+        transport_enabled: true
+        order: 2
+        http_authenticator:
+          type: basic
+          challenge: false
+        authentication_backend:
+          type: ldap
+          config:
+            enable_ssl: false
+            hosts:
+              - ldap.example.com:389
+            bind_dn: cn=admin,dc=example,dc=com
+            password: password
+            userbase: 'ou=people,dc=example,dc=com'
+            usersearch: '(uid={0})'
+    
+    authz:
+      roles_from_ldap:
+        description: "Authorize via LDAP groups"
+        http_enabled: true
+        transport_enabled: true
+        authorization_backend:
+          type: ldap
+          config:
+            enable_ssl: false
+            hosts:
+              - ldap.example.com:389
+            bind_dn: cn=admin,dc=example,dc=com
+            password: password
+            rolebase: 'ou=groups,dc=example,dc=com'
+            rolesearch: '(member={0})'
+            rolename: cn
+            resolve_nested_roles: true
+    
+    # ============================================================================
+    # STEP 2: NEW FORMAT (recommended for new deployments)
+    # ============================================================================
+    # This is the equivalent configuration using the new plugin architecture.
+    # Uncomment these sections and comment out the legacy sections above to migrate.
+    #
+    # BENEFITS OF NEW FORMAT:
+    # - Clear separation between authentication and authorization
+    # - Better claims extraction and mapping
+    # - More flexible configuration
+    # - Easier to mix and match authentication sources
+    
+    # NEW AUTHENTICATION PLUGINS
+    # Uncomment to enable:
+    #
+    # authentication_plugins:
+    #   # Internal authentication (equivalent to 'intern' backend)
+    #   - type: internal
+    #     enabled: true
+    #     order: 1
+    #     description: "Authenticate against internal users database"
+    #     # No additional config needed - uses internal_users.yml
+    #   
+    #   # LDAP authentication (equivalent to 'ldap' backend)
+    #   - type: ldap
+    #     enabled: true
+    #     order: 2
+    #     description: "Authenticate via LDAP and extract claims"
+    #     config:
+    #       # Same LDAP connection settings as before
+    #       enable_ssl: false
+    #       hosts:
+    #         - ldap.example.com:389
+    #       bind_dn: cn=admin,dc=example,dc=com
+    #       password: password
+    #       userbase: 'ou=people,dc=example,dc=com'
+    #       usersearch: '(uid={0})'
+    #       
+    #       # NEW: Claims mapping - extract additional user attributes
+    #       claims_mapping:
+    #         backend_roles: memberOf    # LDAP groups as backend roles
+    #         email: mail                # Extract email
+    #         display_name: displayName  # Extract full name
+    #         department: department     # Extract department
+    
+    # NEW AUTHORIZATION PLUGINS
+    # Uncomment to enable:
+    #
+    # authorization_plugins:
+    #   # Role-based authorization (replaces LDAP authorization backend)
+    #   - type: role_based
+    #     enabled: true
+    #     description: "Map backend roles to security roles"
+    #     config:
+    #       # Map LDAP groups (backend roles) to security roles
+    #       roles_mapping:
+    #         admin:
+    #           backend_roles:
+    #             - cn=admins,ou=groups,dc=example,dc=com
+    #         
+    #         readall:
+    #           backend_roles:
+    #             - cn=developers,ou=groups,dc=example,dc=com
+    #         
+    #         kibanauser:
+    #           backend_roles:
+    #             - cn=kibana-users,ou=groups,dc=example,dc=com
+    #       
+    #       # Or use roles_mapping.yml file:
+    #       # use_roles_mapping_file: true
+
+# ============================================================================
+# MIGRATION STEPS
+# ============================================================================
+#
+# 1. UNDERSTAND YOUR CURRENT CONFIGURATION
+#    - Review your current authc and authz sections
+#    - Identify which authentication backends you use (intern, ldap, saml, etc.)
+#    - Identify which authorization backends you use (ldap, noop, etc.)
+#
+# 2. PLAN YOUR MIGRATION
+#    - Decide which authentication plugins you need
+#    - Decide which authorization plugins you need
+#    - Plan your claims mapping (what user attributes to extract)
+#    - Plan your role mapping (backend roles to security roles)
+#
+# 3. TEST IN NON-PRODUCTION
+#    - Create a test configuration with new plugin format
+#    - Test authentication with all your user types
+#    - Test authorization with all your role types
+#    - Verify claims are extracted correctly
+#    - Verify role mapping works as expected
+#
+# 4. MIGRATE GRADUALLY
+#    - Both formats can coexist during migration
+#    - Start with one authentication source (e.g., internal)
+#    - Verify it works, then add more
+#    - Monitor logs for any issues
+#
+# 5. COMPLETE MIGRATION
+#    - Once all plugins are working, comment out legacy sections
+#    - Keep legacy sections commented for rollback if needed
+#    - After verification period, remove legacy sections
+#
+# 6. USE MIGRATION TOOL (optional)
+#    - Run: ./tools/config-migration.sh config.yml
+#    - Tool will convert legacy format to new format
+#    - Review generated configuration before applying
+#
+# ============================================================================
+# ROLLBACK PLAN
+# ============================================================================
+#
+# If you need to rollback to legacy format:
+# 1. Comment out authentication_plugins and authorization_plugins sections
+# 2. Uncomment authc and authz sections
+# 3. Restart OpenSearch Security
+# 4. Verify authentication and authorization work
+#
+# The legacy format will continue to be supported for multiple releases,
+# so you have time to migrate at your own pace.
+#
+# ============================================================================
+# VERIFICATION
+# ============================================================================
+#
+# After migration, verify:
+# 1. Users can authenticate successfully
+# 2. Users have correct roles assigned
+# 3. Authorization decisions are correct
+# 4. Audit logs show plugin execution
+# 5. Performance is acceptable
+#
+# Check logs for:
+# - Authentication plugin execution
+# - Claims extraction
+# - Authorization plugin execution
+# - Role mapping
+#
+# Enable debug logging:
+# logger.org.opensearch.security.auth.plugin: DEBUG
+#
+# ============================================================================
+

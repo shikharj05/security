@@ -1,0 +1,366 @@
+---
+# OpenSearch Security Configuration - New Plugin Architecture Example
+#
+# This example demonstrates the new authentication and authorization plugin architecture
+# with clear separation of concerns between identity verification and access control.
+#
+# KEY CONCEPTS:
+# - Authentication plugins verify user identity and extract claims (roles, attributes)
+# - Authorization plugins make access control decisions based on user claims
+# - Plugins can be mixed and matched independently
+# - Full backward compatibility with legacy configuration format
+#
+# MIGRATION:
+# See PLUGIN_MIGRATION_GUIDE.md for detailed migration instructions from legacy format.
+
+_meta:
+  type: "config"
+  config_version: 2
+
+config:
+  dynamic:
+    http:
+      anonymous_auth_enabled: false
+      xff:
+        enabled: false
+        internalProxies: '192\.168\.0\.10|192\.168\.0\.11'
+    
+    # ============================================================================
+    # AUTHENTICATION PLUGINS
+    # ============================================================================
+    # Authentication plugins verify user credentials and extract claims.
+    # Plugins are evaluated in order until one succeeds.
+    # Each plugin returns a UserPrincipal containing:
+    #   - User identity (username)
+    #   - Claims (roles, groups, attributes)
+    #   - Authentication type
+    #   - Authentication timestamp
+    
+    authentication_plugins:
+      # Internal user database authentication
+      # Uses internal_users.yml for user credentials and roles
+      - type: internal
+        enabled: true
+        order: 1
+        description: "Authenticate against internal users database"
+        config:
+          # Internal authentication reads from internal_users.yml
+          # No additional configuration needed
+          # Claims extracted:
+          #   - backend_roles: roles defined in internal_users.yml
+          #   - attributes: custom attributes from internal_users.yml
+      
+      # LDAP authentication with comprehensive claims extraction
+      # Authenticates against LDAP/Active Directory and extracts user attributes
+      - type: ldap
+        enabled: true
+        order: 2
+        description: "Authenticate via LDAP and extract user claims"
+        config:
+          # LDAP connection settings
+          enable_ssl: true
+          enable_start_tls: false
+          enable_ssl_client_auth: false
+          verify_hostnames: true
+          hosts:
+            - ldap.example.com:636
+          bind_dn: cn=admin,dc=example,dc=com
+          password: ${LDAP_BIND_PASSWORD}  # Use environment variable for security
+          
+          # User search configuration
+          userbase: 'ou=people,dc=example,dc=com'
+          usersearch: '(uid={0})'
+          username_attribute: uid
+          
+          # Claims mapping - map LDAP attributes to claim names
+          # These claims will be available to authorization plugins
+          claims_mapping:
+            backend_roles: memberOf        # LDAP group memberships
+            email: mail                    # Email address
+            display_name: displayName      # Full name
+            department: department         # Department
+            employee_id: employeeNumber    # Employee ID
+            manager: manager               # Manager DN
+            title: title                   # Job title
+      
+      # SAML 2.0 authentication with attribute mapping
+      # Authenticates via SAML IdP and extracts SAML assertions as claims
+      - type: saml
+        enabled: false
+        order: 3
+        description: "Authenticate via SAML 2.0"
+        config:
+          # SAML IdP configuration
+          idp_metadata_url: https://idp.example.com/metadata
+          sp_entity_id: https://opensearch.example.com
+          
+          # SAML attribute mapping
+          # Maps SAML assertion attributes to standard claim names
+          claims_mapping:
+            backend_roles: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/groups
+            email: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress
+            display_name: http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name
+            department: http://schemas.xmlsoap.org/claims/department
+          
+          # SAML signing and encryption
+          sign_requests: true
+          require_signed_assertions: true
+      
+      # JWT authentication
+      # Validates JSON Web Tokens and extracts JWT claims
+      - type: jwt
+        enabled: false
+        order: 4
+        description: "Authenticate via JSON Web Token"
+        config:
+          # JWT validation settings
+          jwks_uri: https://auth.example.com/.well-known/jwks.json
+          jwt_header: Authorization
+          jwt_url_parameter: null
+          jwt_clock_skew_tolerance_seconds: 30
+          
+          # JWT claims mapping
+          # Maps JWT claims to standard claim names
+          claims_mapping:
+            backend_roles: roles           # JWT 'roles' claim
+            email: email                   # JWT 'email' claim
+            display_name: name             # JWT 'name' claim
+            groups: groups                 # JWT 'groups' claim
+          
+          # JWT validation
+          required_audience: opensearch
+          required_issuer: https://auth.example.com
+      
+      # Kerberos/SPNEGO authentication
+      # Authenticates via Kerberos tickets
+      - type: kerberos
+        enabled: false
+        order: 5
+        description: "Authenticate via Kerberos/SPNEGO"
+        config:
+          krb_debug: false
+          strip_realm_from_principal: true
+          # Additional Kerberos configuration in opensearch.yml:
+          # plugins.security.kerberos.krb5_filepath: /etc/krb5.conf
+          # plugins.security.kerberos.acceptor_keytab_filepath: eskeytab.tab
+          # plugins.security.kerberos.acceptor_principal: HTTP/localhost
+    
+    # ============================================================================
+    # AUTHORIZATION PLUGINS
+    # ============================================================================
+    # Authorization plugins make access control decisions based on authenticated
+    # user claims. Multiple plugins can be configured and are evaluated in order.
+    # Each plugin receives:
+    #   - UserPrincipal (from authentication)
+    #   - AuthorizationContext (action, resource, metadata)
+    # And returns:
+    #   - AuthorizationResult (allow/deny with reason)
+    
+    authorization_plugins:
+      # Role-based authorization
+      # Maps backend roles (from authentication claims) to security roles
+      # Security roles define permissions in roles.yml
+      - type: role_based
+        enabled: true
+        description: "Role-based access control using roles.yml"
+        config:
+          # Role mapping configuration
+          # Maps backend roles (from authentication) to security roles (from roles.yml)
+          roles_mapping:
+            # Admin role - full cluster access
+            admin:
+              backend_roles:
+                - Admins                                      # Simple group name
+                - cn=admins,ou=groups,dc=example,dc=com      # LDAP DN
+                - http://schemas.xmlsoap.org/claims/admin    # SAML attribute
+            
+            # Read-only role - read access to all indices
+            readall:
+              backend_roles:
+                - Developers
+                - cn=developers,ou=groups,dc=example,dc=com
+                - http://schemas.xmlsoap.org/claims/developer
+            
+            # Kibana user role - access to Kibana
+            kibanauser:
+              backend_roles:
+                - KibanaUsers
+                - cn=kibana-users,ou=groups,dc=example,dc=com
+            
+            # Index-specific roles
+            logstash:
+              backend_roles:
+                - LogstashUsers
+                - cn=logstash,ou=groups,dc=example,dc=com
+            
+            # Custom application roles
+            app_reader:
+              backend_roles:
+                - AppReaders
+                - cn=app-readers,ou=groups,dc=example,dc=com
+            
+            app_writer:
+              backend_roles:
+                - AppWriters
+                - cn=app-writers,ou=groups,dc=example,dc=com
+          
+          # Alternative: Use roles_mapping.yml file instead of inline configuration
+          # use_roles_mapping_file: true
+          
+          # Role resolution settings
+          resolve_nested_roles: true
+          cache_ttl_minutes: 60
+      
+      # LDAP-based authorization (optional)
+      # Queries LDAP directly for group memberships and maps to security roles
+      # Use this if you want dynamic LDAP group resolution at authorization time
+      - type: ldap
+        enabled: false
+        description: "LDAP group-based authorization with dynamic resolution"
+        config:
+          # LDAP connection settings
+          enable_ssl: true
+          hosts:
+            - ldap.example.com:636
+          bind_dn: cn=admin,dc=example,dc=com
+          password: ${LDAP_BIND_PASSWORD}
+          
+          # Role search configuration
+          rolebase: 'ou=groups,dc=example,dc=com'
+          rolesearch: '(member={0})'
+          rolename: cn
+          resolve_nested_roles: true
+          
+          # Map LDAP groups to security roles
+          role_mapping:
+            admin:
+              ldap_groups:
+                - cn=admins,ou=groups,dc=example,dc=com
+                - cn=superusers,ou=groups,dc=example,dc=com
+            
+            readall:
+              ldap_groups:
+                - cn=developers,ou=groups,dc=example,dc=com
+                - cn=analysts,ou=groups,dc=example,dc=com
+            
+            kibanauser:
+              ldap_groups:
+                - cn=kibana-users,ou=groups,dc=example,dc=com
+
+# ============================================================================
+# MIGRATION EXAMPLES
+# ============================================================================
+# 
+# Example 1: Migrating from internal authentication backend
+# 
+# OLD FORMAT (still supported):
+# authc:
+#   basic_internal_auth_domain:
+#     http_enabled: true
+#     transport_enabled: true
+#     order: 1
+#     http_authenticator:
+#       type: basic
+#       challenge: true
+#     authentication_backend:
+#       type: intern
+# 
+# NEW FORMAT (recommended):
+# authentication_plugins:
+#   - type: internal
+#     enabled: true
+#     order: 1
+# 
+# authorization_plugins:
+#   - type: role_based
+#     enabled: true
+#     config:
+#       use_roles_mapping_file: true
+#
+# ============================================================================
+# 
+# Example 2: Migrating from LDAP authentication + authorization
+# 
+# OLD FORMAT (still supported):
+# authc:
+#   ldap:
+#     http_enabled: true
+#     order: 1
+#     http_authenticator:
+#       type: basic
+#     authentication_backend:
+#       type: ldap
+#       config:
+#         hosts: [ldap.example.com:389]
+#         bind_dn: cn=admin,dc=example,dc=com
+#         userbase: ou=people,dc=example,dc=com
+#         usersearch: '(uid={0})'
+# 
+# authz:
+#   roles_from_ldap:
+#     authorization_backend:
+#       type: ldap
+#       config:
+#         hosts: [ldap.example.com:389]
+#         rolebase: ou=groups,dc=example,dc=com
+#         rolesearch: '(member={0})'
+# 
+# NEW FORMAT (recommended):
+# authentication_plugins:
+#   - type: ldap
+#     enabled: true
+#     order: 1
+#     config:
+#       hosts: [ldap.example.com:389]
+#       bind_dn: cn=admin,dc=example,dc=com
+#       userbase: ou=people,dc=example,dc=com
+#       usersearch: '(uid={0})'
+#       claims_mapping:
+#         backend_roles: memberOf
+#         email: mail
+# 
+# authorization_plugins:
+#   - type: role_based
+#     enabled: true
+#     config:
+#       roles_mapping:
+#         admin:
+#           backend_roles: [cn=admins,ou=groups,dc=example,dc=com]
+#
+# ============================================================================
+# 
+# Example 3: Mixed authentication sources
+# 
+# NEW FORMAT allows easy mixing of authentication sources:
+# authentication_plugins:
+#   - type: internal      # Try internal users first
+#     enabled: true
+#     order: 1
+#   
+#   - type: ldap          # Then try LDAP
+#     enabled: true
+#     order: 2
+#     config:
+#       hosts: [ldap.example.com:389]
+#       # ... LDAP config
+#   
+#   - type: saml          # Finally try SAML
+#     enabled: true
+#     order: 3
+#     config:
+#       idp_metadata_url: https://idp.example.com/metadata
+#       # ... SAML config
+# 
+# authorization_plugins:
+#   - type: role_based    # Single authorization plugin for all
+#     enabled: true
+#     config:
+#       roles_mapping:
+#         admin:
+#           backend_roles:
+#             - admin                                    # Internal role
+#             - cn=admins,ou=groups,dc=example,dc=com   # LDAP group
+#             - http://schemas.xmlsoap.org/claims/admin # SAML attribute
+#
+# ============================================================================
+

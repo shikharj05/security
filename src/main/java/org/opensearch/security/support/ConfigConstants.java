@@ -119,6 +119,11 @@ public class ConfigConstants {
 
     public static final String OPENDISTRO_SECURITY_USER = OPENDISTRO_SECURITY_CONFIG_PREFIX + "user";
     public static final String OPENDISTRO_SECURITY_USER_HEADER = OPENDISTRO_SECURITY_CONFIG_PREFIX + "user_header";
+    
+    /**
+     * Internal UserPrincipal for plugin architecture (not serialized between nodes)
+     */
+    public static final String OPENDISTRO_SECURITY_USER_PRINCIPAL = OPENDISTRO_SECURITY_CONFIG_PREFIX + "user_principal";
 
     // persistent header. This header is set once and cannot be stashed
     public static final String OPENDISTRO_SECURITY_AUTHENTICATED_USER = OPENDISTRO_SECURITY_CONFIG_PREFIX + "authenticated_user";

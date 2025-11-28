@@ -15,6 +15,8 @@ import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.security.PrivateKey;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
@@ -34,12 +36,15 @@ import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.ThreadContext;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.secure_sm.AccessController;
+import org.opensearch.security.auth.AuthenticationContext;
 import org.opensearch.security.auth.Destroyable;
 import org.opensearch.security.auth.HTTPAuthenticator;
 import org.opensearch.security.auth.http.jwt.AbstractHTTPJwtAuthenticator;
 import org.opensearch.security.auth.http.jwt.keybyoidc.AuthenticatorUnavailableException;
 import org.opensearch.security.auth.http.jwt.keybyoidc.BadCredentialsException;
 import org.opensearch.security.auth.http.jwt.keybyoidc.KeyProvider;
+import org.opensearch.security.auth.plugin.AuthenticationException;
+import org.opensearch.security.auth.plugin.AuthenticationPlugin;
 import org.opensearch.security.filter.OpenSearchRequest;
 import org.opensearch.security.filter.SecurityRequest;
 import org.opensearch.security.filter.SecurityRequestChannelUnsupported;
@@ -48,6 +53,7 @@ import org.opensearch.security.opensaml.integration.SecurityXMLObjectProviderIni
 import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.support.PemKeyReader;
 import org.opensearch.security.user.AuthCredentials;
+import org.opensearch.security.user.UserPrincipal;
 
 import com.nimbusds.jose.jwk.JWK;
 import com.onelogin.saml2.authn.AuthnRequest;
@@ -74,7 +80,20 @@ import org.xml.sax.SAXException;
 import static org.opensearch.security.OpenSearchSecurityPlugin.LEGACY_OPENDISTRO_PREFIX;
 import static org.opensearch.security.OpenSearchSecurityPlugin.PLUGINS_PREFIX;
 
-public class HTTPSamlAuthenticator implements HTTPAuthenticator, Destroyable {
+/**
+ * SAML HTTP authenticator that implements both HTTPAuthenticator and AuthenticationPlugin.
+ * <p>
+ * This class handles SAML authentication by:
+ * 1. Extracting SAML credentials from HTTP requests (HTTPAuthenticator role)
+ * 2. Converting SAML assertions to UserPrincipal with claims (AuthenticationPlugin role)
+ * <p>
+ * The dual implementation allows this authenticator to work in both the legacy HTTP
+ * authentication flow and the new plugin architecture.
+ * <p>
+ * Note: This class no longer depends on the legacy AuthenticationBackend interface.
+ * It directly implements AuthenticationPlugin for the new plugin architecture.
+ */
+public class HTTPSamlAuthenticator implements HTTPAuthenticator, AuthenticationPlugin, Destroyable {
     protected final static Logger log = LogManager.getLogger(HTTPSamlAuthenticator.class);
 
     public static final String IDP_METADATA_URL = "idp.metadata_url";
@@ -176,6 +195,92 @@ public class HTTPSamlAuthenticator implements HTTPAuthenticator, Destroyable {
     @Override
     public String getType() {
         return SAML_TYPE;
+    }
+
+    /**
+     * Checks if this plugin supports the given credentials.
+     * SAML authentication is typically handled through HTTP authenticators,
+     * so this checks for valid credentials with username.
+     *
+     * @param credentials The authentication credentials
+     * @return true if credentials are supported, false otherwise
+     */
+    @Override
+    public boolean supports(AuthCredentials credentials) {
+        // SAML authentication is handled through HTTP layer
+        // This plugin processes SAML assertions that have already been validated
+        return credentials != null && credentials.getUsername() != null;
+    }
+
+    /**
+     * Authenticates a user and extracts SAML assertions as claims.
+     * <p>
+     * This method processes already-validated SAML credentials (validated by the HTTP layer)
+     * and extracts SAML attributes as claims in the UserPrincipal.
+     * <p>
+     * SAML attributes are stored with "saml.attr." prefix to distinguish them from
+     * other claim types.
+     *
+     * @param context The authentication context containing credentials
+     * @return UserPrincipal with identity and SAML claims
+     * @throws AuthenticationException if authentication fails
+     */
+    @Override
+    public UserPrincipal authenticate(AuthenticationContext context) throws AuthenticationException {
+        AuthCredentials credentials = context.getCredentials();
+
+        if (credentials == null || credentials.getUsername() == null) {
+            throw new AuthenticationException(getType(), "Credentials or username is null");
+        }
+
+        try {
+            // Build claims map from credentials
+            Map<String, Object> claims = new HashMap<>();
+
+            // Extract backend roles from credentials
+            if (credentials.getBackendRoles() != null && !credentials.getBackendRoles().isEmpty()) {
+                claims.put("backend_roles", new ArrayList<>(credentials.getBackendRoles()));
+            }
+
+            // Extract security roles from credentials
+            if (credentials.getSecurityRoles() != null && !credentials.getSecurityRoles().isEmpty()) {
+                claims.put("security_roles", new ArrayList<>(credentials.getSecurityRoles()));
+            }
+
+            // Add all attributes from credentials with saml.attr prefix
+            // These are SAML assertions extracted by the HTTP layer
+            if (credentials.getAttributes() != null && !credentials.getAttributes().isEmpty()) {
+                for (Map.Entry<String, String> entry : credentials.getAttributes().entrySet()) {
+                    String key = entry.getKey();
+                    String value = entry.getValue();
+
+                    // Store SAML attributes with prefix for identification
+                    // This includes attributes like saml_ni (NameID), saml_nif (NameID Format),
+                    // saml_si (Session Index), and any custom SAML attributes
+                    if (key.startsWith("attr.jwt.")) {
+                        // JWT attributes from SAML token
+                        claims.put(key, value);
+                    } else {
+                        // Other SAML attributes
+                        claims.put("saml.attr." + key, value);
+                    }
+                }
+            }
+
+            // Return UserPrincipal with identity and claims
+            return UserPrincipal.builder(credentials.getUsername())
+                .claims(claims)
+                .authenticationType(getType())
+                .authenticationTime(System.currentTimeMillis())
+                .build();
+
+        } catch (Exception e) {
+            if (e instanceof AuthenticationException) {
+                throw (AuthenticationException) e;
+            }
+            log.error("Error extracting claims from SAML credentials", e);
+            throw new AuthenticationException(getType(), "Error processing SAML credentials: " + e.getMessage());
+        }
     }
 
     @Override

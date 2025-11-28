@@ -5,6 +5,22 @@
 # alongside with the OpenSearch Security TLS settings.
 # Settings must always be the same on all nodes in the cluster.
 
+############## Plugin Architecture (NEW) ##############
+# OpenSearch Security now supports a new plugin architecture with clear
+# separation between authentication and authorization.
+#
+# Authentication plugins verify user identity and extract claims.
+# Authorization plugins make access control decisions based on claims.
+#
+# Configuration is done in config.yml using the new authentication_plugins
+# and authorization_plugins sections. See config_plugin_architecture.yml.example
+# for detailed examples.
+#
+# The legacy authentication_backend and authorization_backend format is still
+# supported and will be automatically converted to the new plugin format.
+#
+# For migration guidance, see PLUGIN_MIGRATION_GUIDE.md
+
 ############## Common configuration settings ##############
 
 # Specify a list of DNs which denote the other nodes in the cluster.

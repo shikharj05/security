@@ -19,6 +19,7 @@ import java.security.Principal;
 import java.security.PrivilegedAction;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
@@ -41,12 +42,16 @@ import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.env.Environment;
 import org.opensearch.secure_sm.AccessController;
+import org.opensearch.security.auth.AuthenticationContext;
 import org.opensearch.security.auth.HTTPAuthenticator;
+import org.opensearch.security.auth.plugin.AuthenticationException;
+import org.opensearch.security.auth.plugin.AuthenticationPlugin;
 import org.opensearch.security.auth.http.kerberos.util.JaasKrbUtil;
 import org.opensearch.security.auth.http.kerberos.util.KrbConstants;
 import org.opensearch.security.filter.SecurityRequest;
 import org.opensearch.security.filter.SecurityResponse;
 import org.opensearch.security.user.AuthCredentials;
+import org.opensearch.security.user.UserPrincipal;
 
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
@@ -57,7 +62,7 @@ import org.ietf.jgss.Oid;
 
 import static org.apache.http.HttpStatus.SC_UNAUTHORIZED;
 
-public class HTTPSpnegoAuthenticator implements HTTPAuthenticator {
+public class HTTPSpnegoAuthenticator implements HTTPAuthenticator, AuthenticationPlugin {
 
     private static final Oid[] KRB_OIDS = new Oid[] { KrbConstants.SPNEGO, KrbConstants.KRB5MECH };
 
@@ -286,6 +291,71 @@ public class HTTPSpnegoAuthenticator implements HTTPAuthenticator {
     @Override
     public String getType() {
         return "spnego";
+    }
+
+    @Override
+    public boolean supports(AuthCredentials credentials) {
+        // Kerberos authentication is handled through HTTP authenticators
+        // This plugin processes Kerberos tickets that have already been validated
+        return credentials != null && credentials.getUsername() != null;
+    }
+
+    @Override
+    public UserPrincipal authenticate(AuthenticationContext context) throws AuthenticationException {
+        AuthCredentials credentials = context.getCredentials();
+
+        if (credentials == null || credentials.getUsername() == null) {
+            throw new AuthenticationException(getType(), "Credentials or username is null");
+        }
+
+        if (acceptorPrincipal == null || acceptorKeyTabPath == null) {
+            log.error("Missing acceptor principal or keytab configuration. Kerberos authentication will not work");
+            throw new AuthenticationException(getType(), "Kerberos configuration is incomplete");
+        }
+
+        try {
+            // Build claims map from credentials
+            Map<String, Object> claims = new HashMap<>();
+
+            // Extract backend roles from credentials
+            if (credentials.getBackendRoles() != null && !credentials.getBackendRoles().isEmpty()) {
+                claims.put("backend_roles", new ArrayList<>(credentials.getBackendRoles()));
+            }
+
+            // Extract security roles from credentials
+            if (credentials.getSecurityRoles() != null && !credentials.getSecurityRoles().isEmpty()) {
+                claims.put("security_roles", new ArrayList<>(credentials.getSecurityRoles()));
+            }
+
+            // Add all attributes from credentials with kerberos.attr prefix
+            if (credentials.getAttributes() != null && !credentials.getAttributes().isEmpty()) {
+                for (Map.Entry<String, String> entry : credentials.getAttributes().entrySet()) {
+                    String key = entry.getKey();
+                    String value = entry.getValue();
+
+                    // Store with kerberos.attr prefix
+                    claims.put("kerberos.attr." + key, value);
+                }
+            }
+
+            // Add Kerberos-specific metadata
+            claims.put("kerberos.strip_realm", stripRealmFromPrincipalName);
+            claims.put("kerberos.acceptor_principal", new ArrayList<>(acceptorPrincipal));
+
+            // Return UserPrincipal with identity and claims
+            return UserPrincipal.builder(credentials.getUsername())
+                .claims(claims)
+                .authenticationType(getType())
+                .authenticationTime(System.currentTimeMillis())
+                .build();
+
+        } catch (Exception e) {
+            if (e instanceof AuthenticationException) {
+                throw (AuthenticationException) e;
+            }
+            log.error("Error extracting claims from Kerberos credentials", e);
+            throw new AuthenticationException(getType(), "Error processing Kerberos credentials: " + e.getMessage());
+        }
     }
 
     /**

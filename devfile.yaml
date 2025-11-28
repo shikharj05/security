@@ -1,0 +1,16 @@
+schemaVersion: 2.0.0
+components:
+  - name: dev
+    container:
+      image: public.ecr.aws/aws-mde/universal-image:latest
+
+commands:
+  - id: build
+    exec:
+      component: dev
+      commandLine: "./gradlew build -x test"
+
+  - id: test
+    exec:
+      component: dev
+      commandLine: "./gradlew test integrationTest"

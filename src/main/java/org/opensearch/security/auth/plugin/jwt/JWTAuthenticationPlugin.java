@@ -9,7 +9,7 @@
  * GitHub history for details.
  */
 
-package org.opensearch.security.auth.http.jwt;
+package org.opensearch.security.auth.plugin.jwt;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -20,9 +20,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
@@ -34,15 +32,11 @@ import org.apache.logging.log4j.Logger;
 import org.opensearch.OpenSearchSecurityException;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.util.concurrent.ThreadContext;
 import org.opensearch.secure_sm.AccessController;
 import org.opensearch.security.DefaultObjectMapper;
 import org.opensearch.security.auth.AuthenticationContext;
-import org.opensearch.security.auth.HTTPAuthenticator;
 import org.opensearch.security.auth.plugin.AuthenticationException;
 import org.opensearch.security.auth.plugin.AuthenticationPlugin;
-import org.opensearch.security.filter.SecurityRequest;
-import org.opensearch.security.filter.SecurityResponse;
 import org.opensearch.security.user.AuthCredentials;
 import org.opensearch.security.user.UserPrincipal;
 import org.opensearch.security.util.KeyUtils;
@@ -53,15 +47,23 @@ import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.JwtParserBuilder;
 import io.jsonwebtoken.security.WeakKeyException;
 
-import static org.apache.http.HttpHeaders.AUTHORIZATION;
-
-public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPlugin {
+/**
+ * Authentication plugin for JWT-based authentication.
+ * <p>
+ * This plugin processes JWT tokens and extracts claims for authorization.
+ * It supports multiple signing keys, custom claims mapping, and audience validation.
+ * <p>
+ * This implementation follows the new plugin architecture that separates
+ * authentication from authorization.
+ */
+public class JWTAuthenticationPlugin implements AuthenticationPlugin {
 
     protected final Logger log = LogManager.getLogger(this.getClass());
     protected final DeprecationLogger deprecationLog = DeprecationLogger.getLogger(this.getClass());
 
     private static final Pattern BASIC = Pattern.compile("^\\s*Basic\\s.*", Pattern.CASE_INSENSITIVE);
     private static final String BEARER = "bearer ";
+    private static final String AUTHORIZATION = "Authorization";
 
     private final List<JwtParser> jwtParsers = new ArrayList<>();
     private final String jwtHeaderName;
@@ -73,7 +75,13 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
     private final String requireIssuer;
     private final int clockSkewToleranceSeconds;
 
-    public HTTPJwtAuthenticator(final Settings settings, final Path configPath) {
+    /**
+     * Creates a new JWT authentication plugin.
+     *
+     * @param settings Configuration settings for JWT authentication
+     * @param configPath Path to configuration directory
+     */
+    public JWTAuthenticationPlugin(final Settings settings, final Path configPath) {
         super();
 
         List<String> signingKeys = settings.getAsList("signing_key");
@@ -87,7 +95,7 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
         requireIssuer = settings.get("required_issuer");
         clockSkewToleranceSeconds = settings.getAsInt(
             "jwt_clock_skew_tolerance_seconds",
-            AbstractHTTPJwtAuthenticator.DEFAULT_CLOCK_SKEW_TOLERANCE_SECONDS
+            10 // Default clock skew tolerance
         );
 
         if (!jwtHeaderName.equals(AUTHORIZATION)) {
@@ -113,133 +121,6 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
             }
             jwtParsers.add(jwtParser);
         }
-    }
-
-    @Override
-    public AuthCredentials extractCredentials(final SecurityRequest request, final ThreadContext context)
-        throws OpenSearchSecurityException {
-
-        AuthCredentials creds = AccessController.doPrivileged(() -> extractCredentials0(request));
-
-        return creds;
-    }
-
-    private AuthCredentials extractCredentials0(final SecurityRequest request) {
-
-        if (jwtParsers.isEmpty() || jwtParsers.getFirst() == null) {
-            log.error("Missing Signing Key. JWT authentication will not work");
-            return null;
-        }
-
-        String jwtToken = request.header(jwtHeaderName);
-        if (isDefaultAuthHeader && jwtToken != null && BASIC.matcher(jwtToken).matches()) {
-            jwtToken = null;
-        }
-
-        if ((jwtToken == null || jwtToken.isEmpty()) && jwtUrlParameter != null) {
-            jwtToken = request.params().get(jwtUrlParameter);
-        } else {
-            // just consume to avoid "contains unrecognized parameter"
-            request.params().get(jwtUrlParameter);
-        }
-
-        if (jwtToken == null || jwtToken.length() == 0) {
-            if (log.isDebugEnabled()) {
-                log.debug(
-                    "No JWT token found in '{}' {} header",
-                    jwtUrlParameter == null ? jwtHeaderName : jwtUrlParameter,
-                    jwtUrlParameter == null ? "header" : "url parameter"
-                );
-            }
-            return null;
-        }
-
-        final int index;
-        if ((index = jwtToken.toLowerCase().indexOf(BEARER)) > -1) { // detect Bearer
-            jwtToken = jwtToken.substring(index + BEARER.length());
-        } else {
-            if (log.isDebugEnabled()) {
-                log.debug("No Bearer scheme found in header");
-            }
-        }
-
-        for (JwtParser jwtParser : jwtParsers) {
-            try {
-
-                final Claims claims = jwtParser.parseClaimsJws(jwtToken).getBody();
-
-                if (!requiredAudience.isEmpty()) {
-                    assertValidAudienceClaim(claims);
-                }
-
-                final String subject = extractSubject(claims);
-
-                if (subject == null) {
-                    log.error("No subject found in JWT token");
-                    return null;
-                }
-
-                final String[] roles = extractRoles(claims);
-
-                final AuthCredentials ac = new AuthCredentials(subject, roles).markComplete();
-
-                for (Entry<String, Object> claim : claims.entrySet()) {
-                    String key = "attr.jwt." + claim.getKey();
-                    Object value = claim.getValue();
-
-                    if (value instanceof Collection<?>) {
-                        try {
-                            // Convert the list to a JSON array string
-                            String jsonValue = DefaultObjectMapper.writeValueAsString(value, false);
-                            ac.addAttribute(key, jsonValue);
-                        } catch (Exception e) {
-                            log.warn("Failed to convert list claim to JSON for key: " + key, e);
-                            // Fallback to string representation
-                            ac.addAttribute(key, String.valueOf(value));
-                        }
-                    } else {
-                        ac.addAttribute(key, String.valueOf(value));
-                    }
-                }
-
-                return ac;
-
-            } catch (WeakKeyException e) {
-                log.error("Cannot authenticate user with JWT because of ", e);
-                return null;
-            } catch (Exception e) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Invalid or expired JWT token.", e);
-                }
-            }
-        }
-        log.debug("Unable to authenticate JWT Token with any configured signing key");
-        return null;
-    }
-
-    private void assertValidAudienceClaim(Claims claims) throws BadJWTException {
-        if (requiredAudience.isEmpty()) {
-            return;
-        }
-
-        if (Collections.disjoint(claims.getAudience(), requiredAudience)) {
-            throw new BadJWTException("Claim of 'aud' doesn't contain any required audience.");
-        }
-    }
-
-    @Override
-    public Optional<SecurityResponse> reRequestAuthentication(final SecurityRequest channel, AuthCredentials creds) {
-        return Optional.of(
-            new SecurityResponse(HttpStatus.SC_UNAUTHORIZED, Map.of("WWW-Authenticate", "Bearer realm=\"OpenSearch Security\""), "")
-        );
-    }
-
-    @Override
-    public Set<String> getSensitiveUrlParams() {
-        if (jwtUrlParameter != null) {
-            return Set.of(jwtUrlParameter);
-        }
-        return Collections.emptySet();
     }
 
     @Override
@@ -276,10 +157,14 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
                 claims.put("security_roles", new ArrayList<>(credentials.getSecurityRoles()));
             }
 
-            // Add all attributes from credentials (already prefixed with attr.jwt by extractCredentials)
+            // Add all attributes from credentials with jwt.attr prefix
             if (credentials.getAttributes() != null && !credentials.getAttributes().isEmpty()) {
                 for (Map.Entry<String, String> entry : credentials.getAttributes().entrySet()) {
-                    claims.put(entry.getKey(), entry.getValue());
+                    String key = entry.getKey();
+                    String value = entry.getValue();
+
+                    // Store with attr.jwt prefix (matching HTTPJwtAuthenticator pattern)
+                    claims.put(key, value);
                 }
             }
 
@@ -299,13 +184,17 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
         }
     }
 
+    /**
+     * Extracts the subject from JWT claims.
+     * Supports nested claim paths via subject_key configuration.
+     */
     protected String extractSubject(final Claims claims) {
         String subject = claims.getSubject();
         if (subjectKey != null && !subjectKey.isEmpty()) {
-            // ── 1. Traverse the nested structure ───────────────────────────────────────
-            Object node = claims;                                        // start at root
+            // Traverse the nested structure
+            Object node = claims;
             for (String key : subjectKey) {
-                if (!(node instanceof Map<?, ?> map)) {                  // unexpected shape
+                if (!(node instanceof Map<?, ?> map)) {
                     log.warn(
                         "While following subject_key path {}, expected a JSON object before '{}', but found '{}' ({}).",
                         subjectKey,
@@ -313,18 +202,18 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
                         node,
                         node.getClass()
                     );
-                    return null;  // Subject cannot be extracted from the configured path
+                    return null;
                 }
                 node = map.get(key);
-                if (node == null) {                                      // key missing
+                if (node == null) {
                     log.warn("Failed to find '{}' in JWT claims while following subject_key path {}.", key, subjectKey);
-                    return null;  // Subject cannot be extracted from the configured path
+                    return null;
                 }
             }
-            // ── 2. Interpret the leaf value ────────────────────────────────────────────
+            // Interpret the leaf value
             if (node instanceof String str) {
                 return str.trim();
-            } else {                                                     // something odd
+            } else {
                 log.warn(
                     "Expected a String at the end of subject_key path {}, but found '{}' ({}). Converting to String.",
                     subjectKey,
@@ -333,25 +222,27 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
                 );
                 return String.valueOf(node).trim();
             }
-
         }
         return subject;
     }
 
+    /**
+     * Extracts roles from JWT claims.
+     * Supports nested claim paths via roles_key configuration.
+     */
     @SuppressWarnings("unchecked")
     protected String[] extractRoles(final Claims claims) {
-
         // Nothing configured → nothing to extract
         if (rolesKey == null || rolesKey.isEmpty()) {
             return new String[0];
         }
 
-        // ── 1. Traverse the nested structure ───────────────────────────────────────
-        Object node = claims;                                        // start at root
+        // Traverse the nested structure
+        Object node = claims;
         for (String key : rolesKey) {
-            if (!(node instanceof Map<?, ?> map)) {                  // unexpected shape
+            if (!(node instanceof Map<?, ?> map)) {
                 log.warn(
-                    "While following roles_key path {}, expected a JSON object before '{}', " + "but found '{}' ({}).",
+                    "While following roles_key path {}, expected a JSON object before '{}', but found '{}' ({}).",
                     rolesKey,
                     key,
                     node,
@@ -360,21 +251,20 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
                 return new String[0];
             }
             node = map.get(key);
-            if (node == null) {                                      // key missing
+            if (node == null) {
                 log.warn("Failed to find '{}' in JWT claims while following roles_key path {}.", key, rolesKey);
                 return new String[0];
             }
         }
 
-        // ── 2. Interpret the leaf value ────────────────────────────────────────────
-        Set<String> collected = new LinkedHashSet<>();               // dedupe + keep order
+        // Interpret the leaf value
+        Set<String> collected = new LinkedHashSet<>();
 
         if (node instanceof String str) {
-            Arrays.stream(str.split(","))                            // "admin,dev"
+            Arrays.stream(str.split(","))
                 .map(String::trim)
                 .filter(Predicate.not(String::isEmpty))
                 .forEach(collected::add);
-
         } else if (node instanceof Collection<?> col) {
             col.stream()
                 .filter(Objects::nonNull)
@@ -382,10 +272,9 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
                 .map(String::trim)
                 .filter(Predicate.not(String::isEmpty))
                 .forEach(collected::add);
-
-        } else {                                                     // something odd
+        } else {
             log.warn(
-                "Expected a String or Collection at the end of roles_key path {}, " + "but found '{}' ({}). Converting to String.",
+                "Expected a String or Collection at the end of roles_key path {}, but found '{}' ({}). Converting to String.",
                 rolesKey,
                 node,
                 node.getClass()
@@ -396,4 +285,45 @@ public class HTTPJwtAuthenticator implements HTTPAuthenticator, AuthenticationPl
         return collected.toArray(new String[0]);
     }
 
+    /**
+     * Validates audience claim if required.
+     */
+    private void assertValidAudienceClaim(Claims claims) throws BadJWTException {
+        if (requiredAudience.isEmpty()) {
+            return;
+        }
+
+        if (Collections.disjoint(claims.getAudience(), requiredAudience)) {
+            throw new BadJWTException("Claim of 'aud' doesn't contain any required audience.");
+        }
+    }
+
+    /**
+     * Builder for creating JWTAuthenticationPlugin instances with fluent API.
+     */
+    public static class Builder {
+        private Settings settings;
+        private Path configPath;
+
+        public Builder settings(Settings settings) {
+            this.settings = settings;
+            return this;
+        }
+
+        public Builder configPath(Path configPath) {
+            this.configPath = configPath;
+            return this;
+        }
+
+        public JWTAuthenticationPlugin build() {
+            return new JWTAuthenticationPlugin(settings, configPath);
+        }
+    }
+
+    /**
+     * Creates a new builder for JWTAuthenticationPlugin.
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
 }

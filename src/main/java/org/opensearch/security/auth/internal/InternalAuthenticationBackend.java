@@ -29,7 +29,10 @@ package org.opensearch.security.auth.internal;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 
@@ -37,18 +40,33 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 
 import org.opensearch.OpenSearchSecurityException;
-import org.opensearch.security.auth.AuthenticationBackend;
 import org.opensearch.security.auth.AuthenticationContext;
 import org.opensearch.security.auth.AuthorizationBackend;
 import org.opensearch.security.auth.ImpersonationBackend;
+import org.opensearch.security.auth.plugin.AuthenticationException;
+import org.opensearch.security.auth.plugin.AuthenticationPlugin;
 import org.opensearch.security.hasher.PasswordHasher;
 import org.opensearch.security.securityconf.InternalUsersModel;
 import org.opensearch.security.user.AuthCredentials;
 import org.opensearch.security.user.User;
+import org.opensearch.security.user.UserPrincipal;
 
 import org.greenrobot.eventbus.Subscribe;
 
-public class InternalAuthenticationBackend implements AuthenticationBackend, ImpersonationBackend, AuthorizationBackend {
+/**
+ * Internal authentication backend that implements the new AuthenticationPlugin interface.
+ * <p>
+ * This class authenticates users against the internal user database and also provides
+ * backward compatibility by implementing ImpersonationBackend and AuthorizationBackend.
+ * <p>
+ * The authentication logic now returns UserPrincipal instead of User, following the
+ * new plugin architecture that separates authentication from authorization.
+ * <p>
+ * Note: This class no longer implements the legacy AuthenticationBackend interface.
+ * Code that requires the old interface should use AuthenticationBackendAdapter to wrap
+ * this implementation.
+ */
+public class InternalAuthenticationBackend implements AuthenticationPlugin, ImpersonationBackend, AuthorizationBackend {
 
     private final PasswordHasher passwordHasher;
     private InternalUsersModel internalUsersModel;
@@ -96,13 +114,26 @@ public class InternalAuthenticationBackend implements AuthenticationBackend, Imp
     }
 
     @Override
-    public User authenticate(AuthenticationContext context) {
+    public boolean supports(AuthCredentials credentials) {
+        // Internal authentication supports username/password credentials
+        return credentials != null && credentials.getUsername() != null && credentials.getPassword() != null;
+    }
+
+    @Override
+    public UserPrincipal authenticate(AuthenticationContext context) throws AuthenticationException {
         AuthCredentials credentials = context.getCredentials();
 
         boolean userExists;
 
         if (internalUsersModel == null) {
-            throw new OpenSearchSecurityException("Internal authentication backend not configured. May be OpenSearch is not initialized.");
+            throw new AuthenticationException(
+                getType(),
+                "Internal authentication backend not configured. May be OpenSearch is not initialized."
+            );
+        }
+
+        if (credentials == null || credentials.getUsername() == null) {
+            throw new AuthenticationException(getType(), "Credentials or username is null");
         }
 
         final byte[] password;
@@ -119,7 +150,7 @@ public class InternalAuthenticationBackend implements AuthenticationBackend, Imp
         }
 
         if (password == null || password.length == 0) {
-            throw new OpenSearchSecurityException("empty passwords not supported");
+            throw new AuthenticationException(getType(), "empty passwords not supported");
         }
 
         ByteBuffer wrap = ByteBuffer.wrap(password);
@@ -131,19 +162,47 @@ public class InternalAuthenticationBackend implements AuthenticationBackend, Imp
 
         try {
             if (passwordMatchesHash(hash, array) && userExists) {
+                // Authentication successful - extract claims
                 ImmutableSet<String> backendRoles = internalUsersModel.getBackendRoles(credentials.getUsername());
                 ImmutableSet<String> securityRoles = internalUsersModel.getSecurityRoles(credentials.getUsername());
-                ImmutableMap<String, String> attributeMap = ImmutableMap.<String, String>builder()
-                    .putAll(credentials.getAttributes())
-                    .putAll(prefixedAttributeMap(internalUsersModel.getAttributes(credentials.getUsername())))
-                    .build();
+                ImmutableMap<String, String> userAttributes = internalUsersModel.getAttributes(credentials.getUsername());
 
-                return new User(credentials.getUsername(), backendRoles, securityRoles, null, attributeMap, false);
+                // Build claims map
+                Map<String, Object> claims = new HashMap<>();
+
+                // Add backend roles as a claim
+                if (backendRoles != null && !backendRoles.isEmpty()) {
+                    claims.put("backend_roles", new ArrayList<>(backendRoles));
+                }
+
+                // Add security roles as a claim (for backward compatibility)
+                if (securityRoles != null && !securityRoles.isEmpty()) {
+                    claims.put("security_roles", new ArrayList<>(securityRoles));
+                }
+
+                // Add user attributes with "attr.internal." prefix
+                if (userAttributes != null && !userAttributes.isEmpty()) {
+                    for (Map.Entry<String, String> entry : userAttributes.entrySet()) {
+                        claims.put("attr.internal." + entry.getKey(), entry.getValue());
+                    }
+                }
+
+                // Add attributes from credentials
+                if (credentials.getAttributes() != null && !credentials.getAttributes().isEmpty()) {
+                    claims.putAll(credentials.getAttributes());
+                }
+
+                // Return UserPrincipal with identity and claims
+                return UserPrincipal.builder(credentials.getUsername())
+                    .claims(claims)
+                    .authenticationType(getType())
+                    .authenticationTime(System.currentTimeMillis())
+                    .build();
             } else {
                 if (!userExists) {
-                    throw new OpenSearchSecurityException(credentials.getUsername() + " not found");
+                    throw new AuthenticationException(getType(), credentials.getUsername() + " not found");
                 }
-                throw new OpenSearchSecurityException("password does not match");
+                throw new AuthenticationException(getType(), "password does not match");
             }
         } finally {
             Arrays.fill(wrap.array(), (byte) 0);

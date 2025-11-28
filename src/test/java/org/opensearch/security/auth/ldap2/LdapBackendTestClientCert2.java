@@ -60,7 +60,7 @@ public class LdapBackendTestClientCert2 {
         @SuppressWarnings("unused")
         User user;
         try {
-            user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+            user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
             Assert.fail();
         } catch (Exception e) {
             Assert.assertTrue(
@@ -92,7 +92,7 @@ public class LdapBackendTestClientCert2 {
         @SuppressWarnings("unused")
         User user;
         try {
-            user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+            user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
             Assert.fail();
         } catch (Exception e) {
             Assert.assertTrue(
@@ -124,7 +124,7 @@ public class LdapBackendTestClientCert2 {
         @SuppressWarnings("unused")
         User user;
         try {
-            user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+            user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
             Assert.fail();
         } catch (Exception e) {
             Assert.assertTrue(
@@ -154,7 +154,7 @@ public class LdapBackendTestClientCert2 {
             .put("path.home", ".")
             .build();
 
-        final User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+        final User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("ldap_hr_employee"));
     }
@@ -181,7 +181,7 @@ public class LdapBackendTestClientCert2 {
             .put("path.home", ".")
             .build();
 
-        final User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+        final User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("ldap_hr_employee"));
     }
@@ -211,7 +211,7 @@ public class LdapBackendTestClientCert2 {
             // .put(ConfigConstants.LDAP_PASSWORD, "ldapbinder")
             .build();
 
-        final User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+        final User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("ldap_hr_employee"));
     }
@@ -238,7 +238,7 @@ public class LdapBackendTestClientCert2 {
             .put("path.home", ".")
             .build();
 
-        final User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+        final User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("ldap_hr_employee"));
     }
@@ -271,7 +271,7 @@ public class LdapBackendTestClientCert2 {
             .put("path.home", ".")
             .build();
 
-        final User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("ldap_hr_employee", "ldap_hr_employee"));
+        final User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("ldap_hr_employee", "ldap_hr_employee"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("ldap_hr_employee"));
     }

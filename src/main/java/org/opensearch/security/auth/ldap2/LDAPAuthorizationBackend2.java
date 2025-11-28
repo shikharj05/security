@@ -38,8 +38,12 @@ import org.opensearch.security.auth.Destroyable;
 import org.opensearch.security.auth.ldap.util.ConfigConstants;
 import org.opensearch.security.auth.ldap.util.LdapHelper;
 import org.opensearch.security.auth.ldap.util.Utils;
+import org.opensearch.security.auth.plugin.AuthorizationContext;
+import org.opensearch.security.auth.plugin.AuthorizationPlugin;
+import org.opensearch.security.auth.plugin.AuthorizationResult;
 import org.opensearch.security.support.WildcardMatcher;
 import org.opensearch.security.user.User;
+import org.opensearch.security.user.UserPrincipal;
 import org.opensearch.security.util.SettingsBasedSSLConfigurator.SSLConfigException;
 
 import org.ldaptive.Connection;
@@ -52,7 +56,20 @@ import org.ldaptive.SearchFilter;
 import org.ldaptive.SearchScope;
 import org.ldaptive.pool.ConnectionPool;
 
-public class LDAPAuthorizationBackend2 implements AuthorizationBackend, Destroyable {
+/**
+ * LDAP-based authorization backend that implements the AuthorizationPlugin interface.
+ * <p>
+ * This class has been converted to implement {@link AuthorizationPlugin} directly,
+ * removing the dependency on the old {@link AuthorizationBackend} interface.
+ * It now accepts {@link UserPrincipal} and returns {@link AuthorizationResult}.
+ * <p>
+ * The implementation maintains backward compatibility by supporting both the new
+ * plugin interface and the legacy addRoles method for existing code paths.
+ *
+ * @see AuthorizationPlugin
+ * @see AuthorizationBackend
+ */
+public class LDAPAuthorizationBackend2 implements AuthorizationPlugin, AuthorizationBackend, Destroyable {
 
     static final int ZERO_PLACEHOLDER = 0;
     static final int ONE_PLACEHOLDER = 1;
@@ -534,6 +551,301 @@ public class LDAPAuthorizationBackend2 implements AuthorizationBackend, Destroya
     @Override
     public String getType() {
         return "ldap";
+    }
+
+    /**
+     * Makes an authorization decision for a resource access request.
+     * <p>
+     * This implementation resolves LDAP groups from the user principal's claims
+     * and maps them to security roles. Access is allowed if the user has any roles.
+     *
+     * @param principal the authenticated user principal containing identity and claims
+     * @param context the authorization context containing the resource, action, and request metadata
+     * @return an AuthorizationResult indicating whether access is allowed or denied
+     */
+    @Override
+    public AuthorizationResult authorize(UserPrincipal principal, AuthorizationContext context) {
+        if (principal == null) {
+            throw new IllegalArgumentException("principal must not be null");
+        }
+        if (context == null) {
+            throw new IllegalArgumentException("context must not be null");
+        }
+
+        // Resolve permissions for the principal
+        Set<String> roles = resolvePermissions(principal);
+
+        // For this implementation, we allow access if the user has any roles
+        // A production implementation would check specific permissions for the action and resource
+        if (!roles.isEmpty()) {
+            return AuthorizationResult.allow();
+        }
+
+        return AuthorizationResult.deny(
+            "No roles found for user '" + principal.getName() + "' to access resource '" + context.getResource() + "'"
+        );
+    }
+
+    /**
+     * Resolves the effective permissions for a user principal.
+     * <p>
+     * This method extracts LDAP groups from the user principal's claims and resolves
+     * them to security roles by querying the LDAP directory and applying role mappings.
+     *
+     * @param principal the authenticated user principal containing identity and claims
+     * @return a set of resolved permission identifiers or role names
+     */
+    @Override
+    public Set<String> resolvePermissions(UserPrincipal principal) {
+        if (principal == null) {
+            throw new IllegalArgumentException("principal must not be null");
+        }
+
+        try {
+            return AccessController.doPrivilegedChecked(() -> resolvePermissionsFromPrincipal(principal));
+        } catch (Exception e) {
+            if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            } else {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    /**
+     * Internal method to resolve permissions from a UserPrincipal.
+     * This extracts LDAP information from claims and performs role resolution.
+     */
+    private Set<String> resolvePermissionsFromPrincipal(final UserPrincipal principal) throws OpenSearchSecurityException {
+        final String authenticatedUser = principal.getName();
+        final Map<String, Object> claims = principal.getClaims();
+
+        final boolean rolesearchEnabled = settings.getAsBoolean(ConfigConstants.LDAP_AUTHZ_ROLESEARCH_ENABLED, true);
+
+        final boolean isDebugEnabled = log.isDebugEnabled();
+        if (isDebugEnabled) {
+            log.debug("Try to get roles for {}", authenticatedUser);
+        }
+
+        final boolean isTraceEnabled = log.isTraceEnabled();
+        if (isTraceEnabled) {
+            log.trace("authenticatedUser: {}", authenticatedUser);
+            log.trace("claims: {}", claims);
+        }
+
+        if (skipUsersMatcher.test(authenticatedUser)) {
+            log.debug("Skipped search roles of user {}", authenticatedUser);
+            return Collections.emptySet();
+        }
+
+        Set<String> additionalRoles = new HashSet<>();
+
+        try (Connection connection = this.connectionFactory.getConnection()) {
+            connection.open();
+
+            // Extract DN and original username from claims
+            String dn = (String) claims.get("ldap.dn");
+            String originalUserName = (String) claims.get("ldap.original.username");
+
+            // If DN not in claims, try to look up the user
+            if (dn == null) {
+                if (isValidDn(authenticatedUser)) {
+                    dn = authenticatedUser;
+                } else {
+                    LdapEntry entry = this.userSearcher.exists(
+                        connection,
+                        authenticatedUser,
+                        this.returnAttributes,
+                        this.shouldFollowReferrals
+                    );
+                    if (entry != null) {
+                        dn = entry.getDn();
+                    }
+                }
+
+                if (dn == null) {
+                    throw new OpenSearchSecurityException("No user " + authenticatedUser + " found");
+                }
+            }
+
+            if (originalUserName == null) {
+                originalUserName = authenticatedUser;
+            }
+
+            if (isTraceEnabled) {
+                log.trace("User DN: {}", dn);
+                log.trace("Original username: {}", originalUserName);
+            }
+
+            final Set<LdapName> ldapRoles = new HashSet<>(150);
+            final Set<String> nonLdapRoles = new HashSet<>(150);
+            final HashMultimap<LdapName, Map.Entry<String, Settings>> resultRoleSearchBaseKeys = HashMultimap.create();
+
+            // Extract roles from LDAP groups in claims
+            Object ldapGroupsObj = claims.get("ldap.groups");
+            if (ldapGroupsObj instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<String> ldapGroups = (List<String>) ldapGroupsObj;
+                for (String possibleRoleDN : ldapGroups) {
+                    if (isValidDn(possibleRoleDN)) {
+                        LdapName ldapName = new LdapName(possibleRoleDN);
+                        ldapRoles.add(ldapName);
+                        resultRoleSearchBaseKeys.putAll(ldapName, this.roleBaseSettings);
+                    } else {
+                        nonLdapRoles.add(possibleRoleDN);
+                    }
+                }
+            }
+
+            if (isTraceEnabled) {
+                log.trace("User attr. ldap roles count: {}", ldapRoles.size());
+                log.trace("User attr. ldap roles {}", ldapRoles);
+                log.trace("User attr. non-ldap roles count: {}", nonLdapRoles.size());
+                log.trace("User attr. non-ldap roles {}", nonLdapRoles);
+            }
+
+            // The attribute in a role entry containing the name of that role
+            final String roleName = settings.get(ConfigConstants.LDAP_AUTHZ_ROLENAME, DEFAULT_ROLENAME);
+
+            if (isTraceEnabled) {
+                log.trace("roleName: {}", roleName);
+            }
+
+            // Specify the name of the attribute which value should be substituted with {2}
+            final String userRoleAttributeName = settings.get(ConfigConstants.LDAP_AUTHZ_USERROLEATTRIBUTE, null);
+
+            if (isTraceEnabled) {
+                log.trace("userRoleAttribute: {}", userRoleAttributeName);
+                log.trace("rolesearch: {}", settings.get(ConfigConstants.LDAP_AUTHZ_ROLESEARCH, DEFAULT_ROLESEARCH));
+            }
+
+            String userRoleAttributeValue = null;
+            if (userRoleAttributeName != null) {
+                // Try to get from claims
+                userRoleAttributeValue = (String) claims.get("attr.ldap." + userRoleAttributeName);
+            }
+
+            if (rolesearchEnabled) {
+                String escapedDn = dn;
+
+                for (Map.Entry<String, Settings> roleSearchSettingsEntry : roleBaseSettings) {
+                    Settings roleSearchSettings = roleSearchSettingsEntry.getValue();
+
+                    SearchFilter f = new SearchFilter();
+                    f.setFilter(roleSearchSettings.get(ConfigConstants.LDAP_AUTHCZ_SEARCH, DEFAULT_ROLESEARCH));
+                    f.setParameter(ZERO_PLACEHOLDER, escapedDn);
+                    f.setParameter(ONE_PLACEHOLDER, originalUserName);
+                    f.setParameter(TWO_PLACEHOLDER, userRoleAttributeValue == null ? TWO_PLACEHOLDER : userRoleAttributeValue);
+
+                    List<LdapEntry> rolesResult = LdapHelper.search(
+                        connection,
+                        roleSearchSettings.get(ConfigConstants.LDAP_AUTHCZ_BASE, DEFAULT_ROLEBASE),
+                        f,
+                        SearchScope.SUBTREE,
+                        this.returnAttributes,
+                        this.shouldFollowReferrals
+                    );
+
+                    if (isTraceEnabled) {
+                        log.trace(
+                            "Results for LDAP group search for {} in base {}:\n{}",
+                            escapedDn,
+                            roleSearchSettingsEntry.getKey(),
+                            rolesResult
+                        );
+                    }
+
+                    if (rolesResult != null && !rolesResult.isEmpty()) {
+                        for (final Iterator<LdapEntry> iterator = rolesResult.iterator(); iterator.hasNext();) {
+                            LdapEntry searchResultEntry = iterator.next();
+                            LdapName ldapName = new LdapName(searchResultEntry.getDn());
+                            if (!excludeRolesMatcher.test(searchResultEntry.getDn())) {
+                                ldapRoles.add(ldapName);
+                                resultRoleSearchBaseKeys.put(ldapName, roleSearchSettingsEntry);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (isTraceEnabled) {
+                log.trace("roles count total {}", ldapRoles.size());
+            }
+
+            // Handle nested roles
+            if (nestedRoleMatcher != null) {
+                if (isTraceEnabled) {
+                    log.trace("Evaluate nested roles");
+                }
+
+                final Set<LdapName> nestedReturn = new HashSet<>(ldapRoles);
+
+                for (final LdapName roleLdapName : ldapRoles) {
+                    Set<Map.Entry<String, Settings>> nameRoleSearchBaseKeys = resultRoleSearchBaseKeys.get(roleLdapName);
+
+                    if (nameRoleSearchBaseKeys == null) {
+                        log.error("Could not find roleSearchBaseKeys for {}; existing: {}", roleLdapName, resultRoleSearchBaseKeys);
+                        continue;
+                    }
+
+                    final String userRoleNames = settings.get(ConfigConstants.LDAP_AUTHZ_USERROLENAME, DEFAULT_USERROLENAME);
+                    final Set<LdapName> nestedRoles = resolveNestedRoles(
+                        roleLdapName,
+                        connection,
+                        userRoleNames,
+                        0,
+                        rolesearchEnabled,
+                        nameRoleSearchBaseKeys
+                    );
+
+                    if (isTraceEnabled) {
+                        log.trace("{} nested roles for {}", nestedRoles.size(), roleLdapName);
+                    }
+
+                    nestedReturn.addAll(nestedRoles);
+                }
+
+                for (final LdapName roleLdapName : nestedReturn) {
+                    final String role = getRoleFromEntry(connection, roleLdapName, roleName);
+
+                    if (excludeRolesMatcher.test(role)) {
+                        if (isDebugEnabled) {
+                            log.debug("Role was excluded or empty attribute '{}' for entry {}", roleName, roleLdapName);
+                        }
+                    } else {
+                        additionalRoles.add(role);
+                    }
+                }
+            } else {
+                // DN roles, extract rolename according to config
+                for (final LdapName roleLdapName : ldapRoles) {
+                    final String role = getRoleFromEntry(connection, roleLdapName, roleName);
+
+                    if (excludeRolesMatcher.test(role)) {
+                        if (isDebugEnabled) {
+                            log.debug("Role was excluded or empty attribute '{}' for entry {}", roleName, roleLdapName);
+                        }
+                    } else {
+                        additionalRoles.add(role);
+                    }
+                }
+            }
+
+            // Add all non-LDAP roles from user attributes to the final set
+            additionalRoles.addAll(nonLdapRoles);
+
+            if (isDebugEnabled) {
+                log.debug("Roles for {} -> {}", authenticatedUser, additionalRoles);
+            }
+
+            return Collections.unmodifiableSet(additionalRoles);
+
+        } catch (final Exception e) {
+            if (isDebugEnabled) {
+                log.debug("Unable to resolve user roles due to ", e);
+            }
+            throw new OpenSearchSecurityException(e.toString(), e);
+        }
     }
 
     private boolean isValidDn(final String dn) {

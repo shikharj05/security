@@ -22,16 +22,19 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-import org.opensearch.OpenSearchSecurityException;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.security.auth.internal.InternalAuthenticationBackend;
+import org.opensearch.security.auth.plugin.AuthenticationException;
 import org.opensearch.security.hasher.PasswordHasherFactory;
 import org.opensearch.security.securityconf.InternalUsersModel;
 import org.opensearch.security.support.ConfigConstants;
 import org.opensearch.security.user.AuthCredentials;
+import org.opensearch.security.user.UserPrincipal;
 
 import org.mockito.Mockito;
 
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -68,7 +71,7 @@ public class InternalAuthBackendTests {
     }
 
     @Test
-    public void testHashActionWithValidUserValidPassword() {
+    public void testHashActionWithValidUserValidPassword() throws AuthenticationException {
 
         // Make authentication info for valid username with valid password
         final String validPassword = "admin";
@@ -88,8 +91,13 @@ public class InternalAuthBackendTests {
 
         doReturn(true).when(internalAuthenticationBackend).passwordMatchesHash(Mockito.any(String.class), Mockito.any(char[].class));
 
-        // Act
-        internalAuthenticationBackend.authenticate(new AuthenticationContext(validUsernameAuth));
+        // Act - now returns UserPrincipal instead of User
+        UserPrincipal principal = internalAuthenticationBackend.authenticate(new AuthenticationContext(validUsernameAuth));
+
+        // Verify the principal was created correctly
+        assertNotNull(principal);
+        Assert.assertEquals("admin", principal.getName());
+        Assert.assertEquals("internal", principal.getAuthenticationType());
 
         verify(internalAuthenticationBackend, times(1)).passwordMatchesHash(hash, array);
         verify(internalUsersModel, times(1)).getBackendRoles(validUsernameAuth.getUsername());
@@ -110,11 +118,12 @@ public class InternalAuthBackendTests {
         when(internalUsersModel.getHash("admin")).thenReturn(hash);
         when(internalUsersModel.exists("admin")).thenReturn(true);
 
-        OpenSearchSecurityException ex = Assert.assertThrows(
-            OpenSearchSecurityException.class,
+        // Now throws AuthenticationException instead of OpenSearchSecurityException
+        AuthenticationException ex = Assert.assertThrows(
+            AuthenticationException.class,
             () -> internalAuthenticationBackend.authenticate(new AuthenticationContext(validUsernameAuth))
         );
-        assert (ex.getMessage().contains("password does not match"));
+        assertTrue(ex.getMessage().contains("password does not match"));
         verify(internalAuthenticationBackend, times(1)).passwordMatchesHash(hash, array);
     }
 
@@ -133,11 +142,12 @@ public class InternalAuthBackendTests {
         when(internalUsersModel.exists("ertyuiykgjjfguyifdghc")).thenReturn(false);
         when(internalAuthenticationBackend.passwordMatchesHash(hash, array)).thenReturn(true); // Say that the password is correct
 
-        OpenSearchSecurityException ex = Assert.assertThrows(
-            OpenSearchSecurityException.class,
+        // Now throws AuthenticationException instead of OpenSearchSecurityException
+        AuthenticationException ex = Assert.assertThrows(
+            AuthenticationException.class,
             () -> internalAuthenticationBackend.authenticate(new AuthenticationContext(invalidUsernameAuth))
         );
-        assert (ex.getMessage().contains("not found"));
+        assertTrue(ex.getMessage().contains("not found"));
         verify(internalAuthenticationBackend, times(1)).passwordMatchesHash(hash, array);
     }
 
@@ -155,11 +165,27 @@ public class InternalAuthBackendTests {
 
         when(internalUsersModel.exists("ertyuiykgjjfguyifdghc")).thenReturn(false);
 
-        OpenSearchSecurityException ex = Assert.assertThrows(
-            OpenSearchSecurityException.class,
+        // Now throws AuthenticationException instead of OpenSearchSecurityException
+        AuthenticationException ex = Assert.assertThrows(
+            AuthenticationException.class,
             () -> internalAuthenticationBackend.authenticate(new AuthenticationContext(invalidUsernameAuth))
         );
         verify(internalAuthenticationBackend, times(1)).passwordMatchesHash(hash, array);
-        assert (ex.getMessage().contains("not found"));
+        assertTrue(ex.getMessage().contains("not found"));
+    }
+
+    @Test
+    public void testSupportsMethod() {
+        // Test that supports returns true for valid credentials
+        AuthCredentials validCredentials = new AuthCredentials("admin", "password".getBytes());
+        assertTrue(internalAuthenticationBackend.supports(validCredentials));
+
+        // Test that supports returns false for null credentials
+        Assert.assertFalse(internalAuthenticationBackend.supports(null));
+    }
+
+    @Test
+    public void testGetType() {
+        Assert.assertEquals("internal", internalAuthenticationBackend.getType());
     }
 }

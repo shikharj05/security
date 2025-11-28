@@ -97,7 +97,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_AUTHC_USERSEARCH, "(uid={0})")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -110,7 +110,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_POOL_ENABLED, true)
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -123,7 +123,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_FAKE_LOGIN_ENABLED, true)
             .build();
 
-        new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("unknown", "unknown"));
+        new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("unknown", "unknown"));
     }
 
     @Test(expected = OpenSearchSecurityException.class)
@@ -136,7 +136,7 @@ public class LdapBackendTestOldStyleConfig2 {
         String injectString = "*jack*";
 
         @SuppressWarnings("unused")
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx(injectString, "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx(injectString, "secret"));
     }
 
     @Test
@@ -149,7 +149,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_PASSWORD, "spocksecret")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -164,7 +164,7 @@ public class LdapBackendTestOldStyleConfig2 {
                 .put(ConfigConstants.LDAP_PASSWORD, "wrong")
                 .build();
 
-            new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+            new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
             Assert.fail("Expected exception");
         } catch (Exception e) {
             Assert.assertTrue(ExceptionUtils.getStackTrace(e), ExceptionUtils.getStackTrace(e).contains("password was incorrect"));
@@ -178,7 +178,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_AUTHC_USERSEARCH, "(uid={0})")
             .build();
 
-        new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "wrong"));
+        new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "wrong"));
     }
 
     @Test(expected = OpenSearchSecurityException.class)
@@ -188,7 +188,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_AUTHC_USERSEARCH, "(uid={0})")
             .build();
 
-        new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("UNKNOWN", "UNKNOWN"));
+        new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("UNKNOWN", "UNKNOWN"));
     }
 
     @Test(expected = OpenSearchSecurityException.class)
@@ -198,7 +198,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_AUTHC_USERSEARCH, "(uid={0})")
             .build();
 
-        new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "xxxxx"));
+        new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "xxxxx"));
     }
 
     @Test(expected = OpenSearchSecurityException.class)
@@ -209,7 +209,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_POOL_ENABLED, true)
             .build();
 
-        new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "xxxxx"));
+        new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "xxxxx"));
     }
 
     @Test
@@ -226,7 +226,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put("path.home", ".")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -246,7 +246,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put("path.home", ".")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -265,7 +265,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put("path.home", ".")
             .put("path.conf", FileHelper.getAbsoluteFilePathFromClassPath("ldap/root-ca.pem").getParent())
             .build();
-        User user = new LDAPAuthenticationBackend2(settings, Paths.get("src/test/resources/ldap")).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, Paths.get("src/test/resources/ldap")).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -277,7 +277,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .loadFromPath(Paths.get(FileHelper.getAbsoluteFilePathFromClassPath("ldap/test1.yml").toFile().getAbsolutePath()))
             .build();
         Settings settings = Settings.builder().put(settingsFromFile).putList("hosts", "localhost:" + ldapsPort).build();
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -298,7 +298,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         try {
-            new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+            new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
             Assert.fail("Expected Exception");
         } catch (Exception e) {
             assertThat(e.getCause().getClass(), is(org.ldaptive.provider.ConnectionException.class));
@@ -323,7 +323,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         try {
-            new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+            new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
             Assert.fail("Expected Exception");
         } catch (Exception e) {
             assertThat(e.getCause().getClass().toString(), org.ldaptive.provider.ConnectionException.class, is(e.getCause().getClass()));
@@ -348,7 +348,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put("path.home", ".")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
 
@@ -368,7 +368,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put("path.home", ".")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -382,7 +382,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         try {
-            new LDAPAuthenticationBackend2(settings, new File("").toPath()).authenticate(ctx("jacksonm", "secret"));
+            new LDAPAuthenticationBackend2(settings, new File("").toPath()).authenticateAsUser(ctx("jacksonm", "secret"));
             Assert.fail("Expected exception");
         } catch (final Exception e) {
             assertThat(e.getCause().getClass(), is(IllegalStateException.class));
@@ -416,7 +416,7 @@ public class LdapBackendTestOldStyleConfig2 {
 
         AuthenticationContext context = ctx("jacksonm", "secret");
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(context);
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(context);
         user = new LDAPAuthorizationBackend(settings, null).addRoles(user, context);
 
         Assert.assertNotNull(user);
@@ -442,7 +442,7 @@ public class LdapBackendTestOldStyleConfig2 {
 
         AuthenticationContext context = ctx("jacksonm", "secret");
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(context);
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(context);
         user = new LDAPAuthorizationBackend(settings, null).addRoles(user, context);
 
         Assert.assertNotNull(user);
@@ -508,7 +508,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         AuthenticationContext context = ctx("ssign", "ssignsecret");
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(context);
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(context);
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Special\\, Sign,ou=people,o=TEST"));
         user = new LDAPAuthorizationBackend(settings, null).addRoles(user, context);
@@ -529,7 +529,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         AuthenticationContext context = ctx("Michael Jackson", "secret");
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(context);
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(context);
         user = new LDAPAuthorizationBackend(settings, null).addRoles(user, context);
 
         Assert.assertNotNull(user);
@@ -634,7 +634,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         AuthenticationContext context = ctx("jacksonm", "secret");
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(context);
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(context);
         user = new LDAPAuthorizationBackend(settings, null).addRoles(user, context);
 
         Assert.assertNotNull(user);
@@ -652,7 +652,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_AUTHC_USERNAME_ATTRIBUTE, "uid")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("jacksonm"));
     }
@@ -671,7 +671,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put("path.home", ".")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
     }
@@ -689,7 +689,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         AuthenticationContext context = ctx("jacksonm", "secret");
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(context);
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(context);
         user = new LDAPAuthorizationBackend(settings, null).addRoles(user, context);
 
         Assert.assertNotNull(user);
@@ -823,7 +823,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_AUTHC_USERSEARCH, "(uid={0})")
             .build();
 
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
         Assert.assertNotNull(user);
         assertThat(user.getName(), is("cn=Michael Jackson,ou=people,o=TEST"));
         assertThat(user.getCustomAttributesMap().toString(), user.getCustomAttributesMap().size(), is(16));
@@ -834,7 +834,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .put(ConfigConstants.LDAP_CUSTOM_ATTR_MAXVAL_LEN, 0)
             .build();
 
-        user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
 
         assertThat(user.getCustomAttributesMap().toString(), user.getCustomAttributesMap().size(), is(2));
 
@@ -843,7 +843,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .putList(ConfigConstants.LDAP_CUSTOM_ATTR_WHITELIST, "*objectclass*", "entryParentId")
             .build();
 
-        user = new LDAPAuthenticationBackend2(settings, null).authenticate(ctx("jacksonm", "secret"));
+        user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(ctx("jacksonm", "secret"));
 
         assertThat(user.getCustomAttributesMap().toString(), user.getCustomAttributesMap().size(), is(2));
 
@@ -1007,7 +1007,7 @@ public class LdapBackendTestOldStyleConfig2 {
             .build();
 
         AuthenticationContext context = ctx("jacksonm", "secret");
-        User user = new LDAPAuthenticationBackend2(settings, null).authenticate(context);
+        User user = new LDAPAuthenticationBackend2(settings, null).authenticateAsUser(context);
         Assert.assertNotNull(user);
         LdapAttribute operationAttribute = context.getContextData(LdapEntry.class).orElseThrow().getAttribute("entryUUID");
         Assert.assertNotNull(operationAttribute);

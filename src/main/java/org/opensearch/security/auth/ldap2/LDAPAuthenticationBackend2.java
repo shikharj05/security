@@ -13,8 +13,12 @@ package org.opensearch.security.auth.ldap2;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,27 +30,42 @@ import org.apache.logging.log4j.Logger;
 import org.opensearch.OpenSearchSecurityException;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.secure_sm.AccessController;
-import org.opensearch.security.auth.AuthenticationBackend;
 import org.opensearch.security.auth.AuthenticationContext;
 import org.opensearch.security.auth.Destroyable;
 import org.opensearch.security.auth.ImpersonationBackend;
 import org.opensearch.security.auth.ldap.backend.LDAPAuthenticationBackend;
 import org.opensearch.security.auth.ldap.util.ConfigConstants;
 import org.opensearch.security.auth.ldap.util.Utils;
+import org.opensearch.security.auth.plugin.AuthenticationException;
+import org.opensearch.security.auth.plugin.AuthenticationPlugin;
 import org.opensearch.security.support.WildcardMatcher;
+import org.opensearch.security.user.AuthCredentials;
 import org.opensearch.security.user.User;
+import org.opensearch.security.user.UserPrincipal;
 import org.opensearch.security.util.SettingsBasedSSLConfigurator.SSLConfigException;
 
 import org.ldaptive.BindRequest;
 import org.ldaptive.Connection;
 import org.ldaptive.ConnectionFactory;
 import org.ldaptive.Credential;
+import org.ldaptive.LdapAttribute;
 import org.ldaptive.LdapEntry;
 import org.ldaptive.LdapException;
 import org.ldaptive.ReturnAttributes;
 import org.ldaptive.pool.ConnectionPool;
 
-public class LDAPAuthenticationBackend2 implements AuthenticationBackend, ImpersonationBackend, Destroyable {
+/**
+ * LDAP authentication backend that implements the AuthenticationPlugin interface.
+ * <p>
+ * This class authenticates users against an LDAP directory server. It verifies
+ * credentials by binding to the LDAP server and extracts LDAP attributes and groups
+ * as claims in the UserPrincipal.
+ * <p>
+ * This implementation now directly implements {@link AuthenticationPlugin} instead of
+ * the deprecated {@code AuthenticationBackend} interface, following the new plugin
+ * architecture that separates authentication from authorization.
+ */
+public class LDAPAuthenticationBackend2 implements AuthenticationPlugin, ImpersonationBackend, Destroyable {
 
     protected static final Logger log = LogManager.getLogger(LDAPAuthenticationBackend2.class);
 
@@ -86,28 +105,36 @@ public class LDAPAuthenticationBackend2 implements AuthenticationBackend, Impers
     }
 
     @Override
-    public User authenticate(AuthenticationContext context) throws OpenSearchSecurityException {
+    public boolean supports(AuthCredentials credentials) {
+        // LDAP authentication supports username/password credentials
+        return credentials != null && credentials.getUsername() != null && credentials.getPassword() != null;
+    }
+
+    @Override
+    public UserPrincipal authenticate(AuthenticationContext context) throws AuthenticationException {
         try {
             return AccessController.doPrivilegedChecked(() -> authenticate0(context));
         } catch (Exception e) {
-            if (e instanceof OpenSearchSecurityException) {
-                throw (OpenSearchSecurityException) e;
+            if (e instanceof AuthenticationException) {
+                throw (AuthenticationException) e;
             } else if (e instanceof RuntimeException) {
                 throw (RuntimeException) e;
             } else {
-                throw new RuntimeException(e);
+                throw new AuthenticationException(getType(), e.getMessage(), e);
             }
         }
     }
 
-    private User authenticate0(AuthenticationContext context) throws OpenSearchSecurityException {
+    private UserPrincipal authenticate0(AuthenticationContext context) throws AuthenticationException {
+        if (context.getCredentials() == null || context.getCredentials().getUsername() == null) {
+            throw new AuthenticationException(getType(), "Credentials or username is null");
+        }
 
         Connection ldapConnection = null;
         final String user = context.getCredentials().getUsername();
         byte[] password = context.getCredentials().getPassword();
 
         try {
-
             ldapConnection = connectionFactory.getConnection();
             ldapConnection.open();
 
@@ -124,7 +151,7 @@ public class LDAPAuthenticationBackend2 implements AuthenticationBackend, Impers
                 entry = new LdapEntry(fakeLognDn);
                 password = settings.get(ConfigConstants.LDAP_FAKE_LOGIN_PASSWORD, "fakeLoginPwd123").getBytes(StandardCharsets.UTF_8);
             } else if (entry == null) {
-                throw new OpenSearchSecurityException("No user " + user + " found");
+                throw new AuthenticationException(getType(), "No user " + user + " found");
             }
 
             final String dn = entry.getDn();
@@ -150,31 +177,91 @@ public class LDAPAuthenticationBackend2 implements AuthenticationBackend, Impers
                 log.debug("Authenticated username {}", username);
             }
 
-            // Make LdapEntry available to authz backends by adding it to the AuthencationContext
+            // Make LdapEntry available to authz backends by adding it to the AuthenticationContext
             context.addContextData(LdapEntry.class, entry);
 
-            // by default all ldap attributes which are not binary and with a max value
-            // length of 36 are included in the user object
-            // if the whitelist contains at least one value then all attributes will be
-            // additional check if whitelisted (whitelist can contain wildcard and regex)
-            ImmutableMap<String, String> userAttributes = LDAPAuthenticationBackend.extractLdapAttributes(
-                user,
-                entry,
-                customAttrMaxValueLen,
-                allowlistedCustomLdapAttrMatcher
-            );
-            return new User(username, ImmutableSet.of(), ImmutableSet.of(), null, userAttributes, false);
+            // Extract LDAP attributes and groups as claims
+            Map<String, Object> claims = extractLdapClaims(user, entry);
+
+            // Add attributes from credentials if present
+            if (context.getCredentials().getAttributes() != null && !context.getCredentials().getAttributes().isEmpty()) {
+                claims.putAll(context.getCredentials().getAttributes());
+            }
+
+            // Return UserPrincipal with identity and claims
+            return UserPrincipal.builder(username)
+                .claims(claims)
+                .authenticationType(getType())
+                .authenticationTime(System.currentTimeMillis())
+                .build();
+
         } catch (final Exception e) {
             if (log.isDebugEnabled()) {
                 log.debug("Unable to authenticate user due to ", e);
             }
-            throw new OpenSearchSecurityException(e.toString(), e);
+            if (e instanceof AuthenticationException) {
+                throw (AuthenticationException) e;
+            }
+            throw new AuthenticationException(getType(), e.getMessage(), e);
         } finally {
             Arrays.fill(password, (byte) '\0');
             password = null;
             Utils.unbindAndCloseSilently(ldapConnection);
         }
+    }
 
+    /**
+     * Extracts LDAP attributes and groups as claims from an LDAP entry.
+     * <p>
+     * This method extracts:
+     * <ul>
+     *     <li>ldap.dn - The distinguished name of the user</li>
+     *     <li>ldap.original.username - The original username used for authentication</li>
+     *     <li>attr.ldap.* - LDAP attributes that match the allowlist and size constraints</li>
+     * </ul>
+     *
+     * @param originalUsername The original username used for authentication
+     * @param userEntry The LDAP entry for the user
+     * @return Map of claims extracted from LDAP
+     */
+    private Map<String, Object> extractLdapClaims(String originalUsername, LdapEntry userEntry) {
+        Map<String, Object> claims = new HashMap<>();
+
+        // Add DN and original username
+        claims.put("ldap.dn", userEntry.getDn());
+        claims.put("ldap.original.username", originalUsername);
+
+        // Extract LDAP attributes
+        if (customAttrMaxValueLen > 0) {
+            List<String> groups = new ArrayList<>();
+
+            for (LdapAttribute attr : userEntry.getAttributes()) {
+                if (attr != null && !attr.isBinary() && !attr.getName().toLowerCase().contains("password")) {
+                    final String val = Utils.getSingleStringValue(attr);
+
+                    // only consider attributes which are not binary and where its value is not
+                    // longer than customAttrMaxValueLen characters
+                    if (val != null && !val.isEmpty() && val.length() <= customAttrMaxValueLen) {
+                        if (allowlistedCustomLdapAttrMatcher.test(attr.getName())) {
+                            // Store as claim with attr.ldap prefix
+                            claims.put("attr.ldap." + attr.getName(), val);
+
+                            // Collect group memberships
+                            if (attr.getName().equalsIgnoreCase("memberOf") || attr.getName().equalsIgnoreCase("member")) {
+                                groups.add(val);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add groups as a separate claim if any were found
+            if (!groups.isEmpty()) {
+                claims.put("ldap.groups", groups);
+            }
+        }
+
+        return claims;
     }
 
     @Override
@@ -245,7 +332,36 @@ public class LDAPAuthenticationBackend2 implements AuthenticationBackend, Impers
             this.connectionPool.close();
             this.connectionPool = null;
         }
+    }
 
+    /**
+     * Legacy method for backward compatibility with code that expects User objects.
+     * This method authenticates and converts the UserPrincipal to a User object.
+     * 
+     * @deprecated Use {@link #authenticate(AuthenticationContext)} which returns UserPrincipal
+     * @param context The authentication context
+     * @return User object for backward compatibility
+     * @throws OpenSearchSecurityException if authentication fails
+     */
+    @Deprecated
+    public User authenticateAsUser(AuthenticationContext context) throws OpenSearchSecurityException {
+        try {
+            UserPrincipal principal = authenticate(context);
+            // Convert UserPrincipal to User for backward compatibility
+            // Extract backend roles from claims
+            LdapEntry ldapEntry = context.getContextData(LdapEntry.class).orElse(null);
+            ImmutableMap<String, String> userAttributes = ldapEntry != null
+                ? LDAPAuthenticationBackend.extractLdapAttributes(
+                    (String) principal.getClaims().getOrDefault("ldap.original.username", principal.getName()),
+                    ldapEntry,
+                    customAttrMaxValueLen,
+                    allowlistedCustomLdapAttrMatcher
+                )
+                : ImmutableMap.of();
+            return new User(principal.getName(), ImmutableSet.of(), ImmutableSet.of(), null, userAttributes, false);
+        } catch (AuthenticationException e) {
+            throw new OpenSearchSecurityException(e.getMessage(), e);
+        }
     }
 
 }

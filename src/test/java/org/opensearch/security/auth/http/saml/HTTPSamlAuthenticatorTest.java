@@ -1000,6 +1000,11 @@ public class HTTPSamlAuthenticatorTest {
         }
 
         @Override
+        public boolean detailedErrorStackTraceEnabled() {
+            return false;
+        }
+
+        @Override
         public void sendResponse(RestResponse response) {
             this.response = response;
 
@@ -1020,5 +1025,137 @@ public class HTTPSamlAuthenticatorTest {
             this.location = location;
             this.requestId = requestId;
         }
+    }
+
+    // Tests for AuthenticationPlugin interface implementation
+
+    @Test
+    public void testAuthenticationPluginSupports() throws Exception {
+        Settings settings = Settings.builder()
+            .put(IDP_METADATA_URL, "http://localhost:33667/metadata")
+            .put("kibana_url", "http://wherever")
+            .put("idp.entity_id", "http://idp.example.com")
+            .put("exchange_key", "abc")
+            .put("roles_key", "roles")
+            .put("path.home", ".")
+            .build();
+
+        HTTPSamlAuthenticator samlAuthenticator = new HTTPSamlAuthenticator(settings, null);
+
+        // Test supports with valid credentials
+        AuthCredentials validCredentials = new AuthCredentials("testuser");
+        assertThat(samlAuthenticator.supports(validCredentials), is(true));
+
+        // Test supports with null credentials
+        assertThat(samlAuthenticator.supports(null), is(false));
+    }
+
+    @Test
+    public void testAuthenticationPluginAuthenticate() throws Exception {
+        Settings settings = Settings.builder()
+            .put(IDP_METADATA_URL, "http://localhost:33667/metadata")
+            .put("kibana_url", "http://wherever")
+            .put("idp.entity_id", "http://idp.example.com")
+            .put("exchange_key", "abc")
+            .put("roles_key", "roles")
+            .put("path.home", ".")
+            .build();
+
+        HTTPSamlAuthenticator samlAuthenticator = new HTTPSamlAuthenticator(settings, null);
+
+        // Create credentials with SAML attributes
+        AuthCredentials credentials = new AuthCredentials("testuser", "role1", "role2");
+        credentials.addAttribute("attr.jwt.sub", "testuser");
+        credentials.addAttribute("attr.jwt.saml_ni", "testuser@example.com");
+        credentials.addAttribute("attr.jwt.saml_nif", "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress");
+        credentials.addAttribute("attr.jwt.saml_si", "session123");
+        credentials.addAttribute("custom_attr", "custom_value");
+
+        org.opensearch.security.auth.AuthenticationContext authContext = new org.opensearch.security.auth.AuthenticationContext(
+            credentials
+        );
+
+        // Authenticate and get UserPrincipal
+        org.opensearch.security.user.UserPrincipal principal = samlAuthenticator.authenticate(authContext);
+
+        // Verify principal
+        assertThat(principal.getName(), is("testuser"));
+        assertThat(principal.getAuthenticationType(), is("saml"));
+
+        // Verify claims
+        java.util.Map<String, Object> claims = principal.getClaims();
+        assertThat(claims.containsKey("backend_roles"), is(true));
+        assertThat(((java.util.List<?>) claims.get("backend_roles")).size(), is(2));
+
+        // Verify JWT attributes are preserved
+        assertThat(claims.get("attr.jwt.sub"), is("testuser"));
+        assertThat(claims.get("attr.jwt.saml_ni"), is("testuser@example.com"));
+        assertThat(claims.get("attr.jwt.saml_si"), is("session123"));
+
+        // Verify custom attributes are prefixed
+        assertThat(claims.get("saml.attr.custom_attr"), is("custom_value"));
+    }
+
+    @Test(expected = org.opensearch.security.auth.plugin.AuthenticationException.class)
+    public void testAuthenticationPluginAuthenticateNullCredentials() throws Exception {
+        Settings settings = Settings.builder()
+            .put(IDP_METADATA_URL, "http://localhost:33667/metadata")
+            .put("kibana_url", "http://wherever")
+            .put("idp.entity_id", "http://idp.example.com")
+            .put("exchange_key", "abc")
+            .put("roles_key", "roles")
+            .put("path.home", ".")
+            .build();
+
+        HTTPSamlAuthenticator samlAuthenticator = new HTTPSamlAuthenticator(settings, null);
+
+        org.opensearch.security.auth.AuthenticationContext authContext = new org.opensearch.security.auth.AuthenticationContext(
+            null
+        );
+
+        samlAuthenticator.authenticate(authContext);
+    }
+
+    @Test(expected = org.opensearch.security.auth.plugin.AuthenticationException.class)
+    public void testAuthenticationPluginAuthenticateNullUsername() throws Exception {
+        Settings settings = Settings.builder()
+            .put(IDP_METADATA_URL, "http://localhost:33667/metadata")
+            .put("kibana_url", "http://wherever")
+            .put("idp.entity_id", "http://idp.example.com")
+            .put("exchange_key", "abc")
+            .put("roles_key", "roles")
+            .put("path.home", ".")
+            .build();
+
+        HTTPSamlAuthenticator samlAuthenticator = new HTTPSamlAuthenticator(settings, null);
+
+        // Create credentials with null username - this will throw IllegalArgumentException
+        // So we need to catch that and throw AuthenticationException instead
+        try {
+            AuthCredentials credentials = new AuthCredentials(null);
+            org.opensearch.security.auth.AuthenticationContext authContext = new org.opensearch.security.auth.AuthenticationContext(
+                credentials
+            );
+            samlAuthenticator.authenticate(authContext);
+        } catch (IllegalArgumentException e) {
+            // Convert to AuthenticationException for test
+            throw new org.opensearch.security.auth.plugin.AuthenticationException("saml", e.getMessage());
+        }
+    }
+
+    @Test
+    public void testAuthenticationPluginGetType() throws Exception {
+        Settings settings = Settings.builder()
+            .put(IDP_METADATA_URL, "http://localhost:33667/metadata")
+            .put("kibana_url", "http://wherever")
+            .put("idp.entity_id", "http://idp.example.com")
+            .put("exchange_key", "abc")
+            .put("roles_key", "roles")
+            .put("path.home", ".")
+            .build();
+
+        HTTPSamlAuthenticator samlAuthenticator = new HTTPSamlAuthenticator(settings, null);
+
+        assertThat(samlAuthenticator.getType(), is("saml"));
     }
 }

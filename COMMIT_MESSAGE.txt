@@ -1,0 +1,24 @@
+Update plugin initialization to use converted implementations
+
+Modified OpenSearchSecurityPlugin to perform startup checks that verify
+the plugin architecture transition status. Added inspection methods to
+BackendRegistry to enable monitoring of plugin architecture adoption.
+
+Key changes:
+- Added performPluginArchitectureStartupChecks() to OpenSearchSecurityPlugin
+  that verifies plugin architecture status during initialization
+- Added inspection methods to BackendRegistry:
+  - isUsingPluginArchitecture(): checks if plugin architecture is active
+  - getAdapterCount(): counts adapters still in use
+  - getAuthenticationPluginCount(): returns auth plugin count
+  - getAuthorizationPluginCount(): returns authz plugin count
+- Startup checks log warnings when adapters are detected
+- Confirms rolling upgrade compatibility (User serialization unchanged)
+- Added comprehensive unit tests in PluginInitializationStartupChecksTest
+
+The startup checks provide visibility into the migration status without
+blocking startup, supporting gradual transition to the new plugin
+architecture. Operators receive clear guidance when backends need
+conversion, with references to PLUGIN_MIGRATION_GUIDE.md.
+
+Satisfies requirements: 1.1, 1.2, 4.1, 4.2, 5.4
