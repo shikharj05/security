@@ -83,6 +83,26 @@ public interface AuditLog extends Closeable {
     // set config
     void setConfig(AuditConfig auditConfig);
 
+    // plugin execution
+    void logAuthenticationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        Map<String, Object> claims,
+        SecurityRequest request
+    );
+
+    void logAuthorizationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        String action,
+        String resource,
+        SecurityRequest request
+    );
+
     public enum Origin {
         REST,
         TRANSPORT,

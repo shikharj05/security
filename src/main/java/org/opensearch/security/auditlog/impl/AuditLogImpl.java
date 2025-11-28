@@ -243,4 +243,33 @@ public final class AuditLogImpl extends AbstractAuditLog {
         }
     }
 
+    @Override
+    public void logAuthenticationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        Map<String, Object> claims,
+        SecurityRequest request
+    ) {
+        if (enabled) {
+            super.logAuthenticationPluginExecution(pluginType, result, executionTimeMs, principalName, claims, request);
+        }
+    }
+
+    @Override
+    public void logAuthorizationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        String action,
+        String resource,
+        SecurityRequest request
+    ) {
+        if (enabled) {
+            super.logAuthorizationPluginExecution(pluginType, result, executionTimeMs, principalName, action, resource, request);
+        }
+    }
+
 }

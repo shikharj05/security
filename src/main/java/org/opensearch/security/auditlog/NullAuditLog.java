@@ -133,4 +133,29 @@ public class NullAuditLog implements AuditLog {
 
     }
 
+    @Override
+    public void logAuthenticationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        Map<String, Object> claims,
+        SecurityRequest request
+    ) {
+        // noop, intentionally left empty
+    }
+
+    @Override
+    public void logAuthorizationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        String action,
+        String resource,
+        SecurityRequest request
+    ) {
+        // noop, intentionally left empty
+    }
+
 }

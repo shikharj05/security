@@ -132,6 +132,15 @@ public final class AuditMessage {
     public static final String COMPLIANCE_OPERATION = "audit_compliance_operation";
     public static final String COMPLIANCE_DOC_VERSION = "audit_compliance_doc_version";
 
+    // Plugin-specific audit fields
+    public static final String PLUGIN_TYPE = "audit_plugin_type";
+    public static final String PLUGIN_RESULT = "audit_plugin_result";
+    public static final String PLUGIN_EXECUTION_TIME_MS = "audit_plugin_execution_time_ms";
+    public static final String PLUGIN_PRINCIPAL_NAME = "audit_plugin_principal_name";
+    public static final String PLUGIN_PRINCIPAL_CLAIMS = "audit_plugin_principal_claims";
+    public static final String PLUGIN_AUTHORIZATION_ACTION = "audit_plugin_authorization_action";
+    public static final String PLUGIN_AUTHORIZATION_RESOURCE = "audit_plugin_authorization_resource";
+
     private static final DateTimeFormatter DEFAULT_FORMAT = DateTimeFormat.forPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZZ");
     private final Map<String, Object> auditInfo = new HashMap<String, Object>(50);
     private final AuditCategory msgCategory;
@@ -507,6 +516,47 @@ public final class AuditMessage {
             return JsonXContent.contentBuilder().map(getAsMap()).toString();
         } catch (final IOException e) {
             throw ExceptionsHelper.convertToOpenSearchException(e);
+        }
+    }
+
+    // Plugin-specific audit methods
+    public void addPluginType(String pluginType) {
+        if (pluginType != null) {
+            auditInfo.put(PLUGIN_TYPE, pluginType);
+        }
+    }
+
+    public void addPluginResult(String result) {
+        if (result != null) {
+            auditInfo.put(PLUGIN_RESULT, result);
+        }
+    }
+
+    public void addPluginExecutionTimeMs(long executionTimeMs) {
+        auditInfo.put(PLUGIN_EXECUTION_TIME_MS, executionTimeMs);
+    }
+
+    public void addPluginPrincipalName(String principalName) {
+        if (principalName != null) {
+            auditInfo.put(PLUGIN_PRINCIPAL_NAME, principalName);
+        }
+    }
+
+    public void addPluginPrincipalClaims(Map<String, Object> claims) {
+        if (claims != null && !claims.isEmpty()) {
+            auditInfo.put(PLUGIN_PRINCIPAL_CLAIMS, claims);
+        }
+    }
+
+    public void addPluginAuthorizationAction(String action) {
+        if (action != null) {
+            auditInfo.put(PLUGIN_AUTHORIZATION_ACTION, action);
+        }
+    }
+
+    public void addPluginAuthorizationResource(String resource) {
+        if (resource != null) {
+            auditInfo.put(PLUGIN_AUTHORIZATION_RESOURCE, resource);
         }
     }
 

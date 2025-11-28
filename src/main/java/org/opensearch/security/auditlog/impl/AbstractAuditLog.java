@@ -938,6 +938,70 @@ public abstract class AbstractAuditLog implements AuditLog {
 
     protected abstract void save(final AuditMessage msg);
 
+    @Override
+    public void logAuthenticationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        Map<String, Object> claims,
+        SecurityRequest request
+    ) {
+        if (!checkRestFilter(AuditCategory.AUTHENTICATION_PLUGIN_EXECUTION, principalName, request)) {
+            return;
+        }
+
+        AuditMessage msg = new AuditMessage(AuditCategory.AUTHENTICATION_PLUGIN_EXECUTION, clusterService, Origin.REST, Origin.REST);
+        msg.addPluginType(pluginType);
+        msg.addPluginResult(result);
+        msg.addPluginExecutionTimeMs(executionTimeMs);
+        msg.addPluginPrincipalName(principalName);
+        msg.addPluginPrincipalClaims(claims);
+        msg.addEffectiveUser(principalName);
+
+        if (request != null) {
+            msg.addPath(request.path());
+            request.getRemoteAddress().ifPresent(addr -> {
+                msg.addRemoteAddress(new org.opensearch.core.common.transport.TransportAddress(addr));
+            });
+        }
+
+        save(msg);
+    }
+
+    @Override
+    public void logAuthorizationPluginExecution(
+        String pluginType,
+        String result,
+        long executionTimeMs,
+        String principalName,
+        String action,
+        String resource,
+        SecurityRequest request
+    ) {
+        if (!checkRestFilter(AuditCategory.AUTHORIZATION_PLUGIN_EXECUTION, principalName, request)) {
+            return;
+        }
+
+        AuditMessage msg = new AuditMessage(AuditCategory.AUTHORIZATION_PLUGIN_EXECUTION, clusterService, Origin.REST, Origin.REST);
+        msg.addPluginType(pluginType);
+        msg.addPluginResult(result);
+        msg.addPluginExecutionTimeMs(executionTimeMs);
+        msg.addPluginPrincipalName(principalName);
+        msg.addPluginAuthorizationAction(action);
+        msg.addPluginAuthorizationResource(resource);
+        msg.addEffectiveUser(principalName);
+
+        if (request != null) {
+            msg.addPath(request.path());
+            request.getRemoteAddress().ifPresent(addr -> {
+                msg.addRemoteAddress(new org.opensearch.core.common.transport.TransportAddress(addr));
+            });
+        }
+
+        save(msg);
+    }
+
     @Subscribe
     public void onDynamicConfigModelChanged(DynamicConfigModel dcm) {
         SortedSet<AuthDomain> authDomains = Collections.unmodifiableSortedSet(dcm.getRestAuthDomains());
