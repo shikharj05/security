@@ -143,6 +143,22 @@ import org.opensearch.security.auditlog.config.AuditConfig.Filter.FilterEntries;
 import org.opensearch.security.auditlog.impl.AuditLogImpl;
 import org.opensearch.security.auth.BackendRegistry;
 import org.opensearch.security.auth.RolesInjector;
+import org.opensearch.security.auth.passkey.ChallengeStore;
+import org.opensearch.security.auth.passkey.HTTPPasskeyAuthenticator;
+import org.opensearch.security.auth.passkey.InMemoryChallengeStore;
+import org.opensearch.security.auth.passkey.OpenSearchPasskeyCredentialRepository;
+import org.opensearch.security.auth.passkey.PasskeyAuthenticationBackend;
+import org.opensearch.security.auth.passkey.PasskeyAuthenticationConfig;
+import org.opensearch.security.auth.passkey.PasskeyCredentialRepository;
+import org.opensearch.security.auth.passkey.RelyingPartyConfig;
+import org.opensearch.security.auth.passkey.WebAuthnManager;
+import com.webauthn4j.data.AttestationConveyancePreference;
+import com.webauthn4j.data.AuthenticatorAttachment;
+import com.webauthn4j.data.PublicKeyCredentialParameters;
+import com.webauthn4j.data.PublicKeyCredentialType;
+import com.webauthn4j.data.ResidentKeyRequirement;
+import com.webauthn4j.data.UserVerificationRequirement;
+import com.webauthn4j.data.attestation.statement.COSEAlgorithmIdentifier;
 import org.opensearch.security.compliance.ComplianceIndexingOperationListener;
 import org.opensearch.security.compliance.ComplianceIndexingOperationListenerImpl;
 import org.opensearch.security.configuration.AdminDNs;
@@ -190,6 +206,11 @@ import org.opensearch.security.resources.api.share.ShareTransportAction;
 import org.opensearch.security.resources.settings.ResourceSharingFeatureFlagSetting;
 import org.opensearch.security.resources.settings.ResourceSharingProtectedResourcesSetting;
 import org.opensearch.security.rest.DashboardsInfoAction;
+import org.opensearch.security.rest.PasskeyAuthenticationOptionsAction;
+import org.opensearch.security.rest.PasskeyAuthenticationVerifyAction;
+import org.opensearch.security.rest.PasskeyCredentialManagementAction;
+import org.opensearch.security.rest.PasskeyRegistrationOptionsAction;
+import org.opensearch.security.rest.PasskeyRegistrationVerifyAction;
 import org.opensearch.security.rest.SecurityConfigUpdateAction;
 import org.opensearch.security.rest.SecurityHealthAction;
 import org.opensearch.security.rest.SecurityInfoAction;
@@ -300,6 +321,11 @@ public final class OpenSearchSecurityPlugin extends OpenSearchSecuritySSLPlugin
     private ResourceAccessHandler resourceAccessHandler;
     private final ResourcePluginInfo resourcePluginInfo = new ResourcePluginInfo();
     private volatile ResourceAccessEvaluator resourceAccessEvaluator;
+    private volatile ChallengeStore challengeStore;
+    private volatile PasskeyCredentialRepository passkeyCredentialRepository;
+    private volatile WebAuthnManager webAuthnManager;
+    private volatile HTTPPasskeyAuthenticator httpPasskeyAuthenticator;
+    private volatile PasskeyAuthenticationBackend passkeyAuthenticationBackend;
 
     public static boolean isActionTraceEnabled() {
 
@@ -702,6 +728,74 @@ public final class OpenSearchSecurityPlugin extends OpenSearchSecuritySSLPlugin
                         resourcePluginInfo
                     )
                 );
+
+                // Passkey authentication REST handlers
+                log.info("Checking passkey components: challengeStore={}, passkeyCredentialRepository={}, webAuthnManager={}", 
+                    challengeStore != null, passkeyCredentialRepository != null, webAuthnManager != null);
+                if (challengeStore != null && passkeyCredentialRepository != null && webAuthnManager != null) {
+                    log.info("Registering passkey REST handlers");
+                    handlers.add(
+                        new PasskeyRegistrationOptionsAction(
+                            settings,
+                            restController,
+                            Objects.requireNonNull(webAuthnManager),
+                            Objects.requireNonNull(challengeStore),
+                            Objects.requireNonNull(passkeyCredentialRepository),
+                            Objects.requireNonNull(threadPool)
+                        )
+                    );
+                    handlers.add(
+                        new PasskeyRegistrationVerifyAction(
+                            settings,
+                            restController,
+                            Objects.requireNonNull(webAuthnManager),
+                            Objects.requireNonNull(challengeStore),
+                            Objects.requireNonNull(passkeyCredentialRepository),
+                            Objects.requireNonNull(threadPool),
+                            Objects.requireNonNull(auditLog)
+                        )
+                    );
+                    handlers.add(
+                        new PasskeyAuthenticationOptionsAction(
+                            settings,
+                            restController,
+                            Objects.requireNonNull(webAuthnManager),
+                            Objects.requireNonNull(challengeStore),
+                            Objects.requireNonNull(passkeyCredentialRepository),
+                            Objects.requireNonNull(threadPool)
+                        )
+                    );
+                    
+                    // Initialize PasskeyAuthenticationBackend if not already done
+                    if (passkeyAuthenticationBackend == null) {
+                        passkeyAuthenticationBackend = new PasskeyAuthenticationBackend(
+                            settings,
+                            configPath,
+                            Objects.requireNonNull(webAuthnManager),
+                            Objects.requireNonNull(passkeyCredentialRepository),
+                            Objects.requireNonNull(challengeStore),
+                            Objects.requireNonNull(auditLog)
+                        );
+                    }
+                    
+                    handlers.add(
+                        new PasskeyAuthenticationVerifyAction(
+                            settings,
+                            restController,
+                            Objects.requireNonNull(passkeyAuthenticationBackend),
+                            Objects.requireNonNull(threadPool)
+                        )
+                    );
+                    handlers.add(
+                        new PasskeyCredentialManagementAction(
+                            settings,
+                            restController,
+                            Objects.requireNonNull(passkeyCredentialRepository),
+                            Objects.requireNonNull(threadPool),
+                            Objects.requireNonNull(auditLog)
+                        )
+                    );
+                }
 
                 // Resource sharing API to update sharing info
                 handlers.add(
@@ -1171,6 +1265,39 @@ public final class OpenSearchSecurityPlugin extends OpenSearchSecuritySSLPlugin
         backendRegistry.registerClusterSettingsChangeListener(clusterService.getClusterSettings());
         cr.subscribeOnChange(configMap -> { backendRegistry.invalidateCache(); });
 
+        // Initialize passkey authentication components
+        challengeStore = new InMemoryChallengeStore();
+        passkeyCredentialRepository = new OpenSearchPasskeyCredentialRepository(localClient, threadPool);
+        
+        // WebAuthnManager will be initialized when passkey config is available
+        // For now, initialize with default settings to ensure REST endpoints are available
+        try {
+            PasskeyAuthenticationConfig passkeyConfig = new PasskeyAuthenticationConfig(settings, configPath);
+            RelyingPartyConfig rpConfig = passkeyConfig.parse();
+            webAuthnManager = new WebAuthnManager(rpConfig);
+            log.info("Initialized WebAuthnManager with configuration from opensearch.yml");
+        } catch (Exception e) {
+            log.debug("WebAuthnManager not initialized from static config, using default configuration: {}", e.getMessage());
+            // Initialize with default configuration so REST endpoints are available
+            RelyingPartyConfig defaultConfig = new RelyingPartyConfig(
+                "localhost",  // Default RP ID
+                "OpenSearch",  // Default RP name
+                List.of("https://localhost:9200", "http://localhost:9200", "https://localhost", "http://localhost"),  // Default origins
+                300000L,  // 5 minutes
+                UserVerificationRequirement.PREFERRED,  // User verification
+                AttestationConveyancePreference.NONE,  // Attestation
+                null,  // Authenticator attachment
+                ResidentKeyRequirement.PREFERRED,  // Resident key
+                List.of(
+                    new PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, COSEAlgorithmIdentifier.ES256),
+                    new PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, COSEAlgorithmIdentifier.RS256),
+                    new PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, COSEAlgorithmIdentifier.EdDSA)
+                )  // Algorithms
+            );
+            webAuthnManager = new WebAuthnManager(defaultConfig);
+            log.info("Initialized WebAuthnManager with default configuration");
+        }
+        
         final CompatConfig compatConfig = new CompatConfig(environment, transportPassiveAuthSetting);
 
         rsIndexHandler = new ResourceSharingIndexHandler(localClient, threadPool, resourcePluginInfo);
@@ -1325,6 +1452,10 @@ public final class OpenSearchSecurityPlugin extends OpenSearchSecuritySSLPlugin
         components.add(dcf);
         components.add(userService);
         components.add(passwordHasher);
+        
+        // Add passkey components
+        components.add(challengeStore);
+        components.add(passkeyCredentialRepository);
 
         components.add(sslSettingsManager);
         if (isSslCertReloadEnabled(settings) && sslCertificatesHotReloadEnabled(settings)) {

@@ -144,6 +144,8 @@ public abstract class DynamicConfigModel {
         authImplMap.put("jwt_h", HTTPJwtKeyByJWKSAuthenticator.class.getName());
         authImplMap.put("openid_h", HTTPJwtKeyByOpenIdConnectAuthenticator.class.getName());
         authImplMap.put("saml_h", HTTPSamlAuthenticator.class.getName());
+        authImplMap.put("passkey_h", "org.opensearch.security.auth.passkey.HTTPPasskeyAuthenticator");
+        authImplMap.put("passkey_c", "org.opensearch.security.auth.passkey.PasskeyAuthenticationBackend");
 
         authImplMap.put("ip_authFailureListener", AddressBasedRateLimiter.class.getName());
         authImplMap.put("username_authFailureListener", UserNameBasedRateLimiter.class.getName());

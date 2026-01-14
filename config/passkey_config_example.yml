@@ -1,0 +1,423 @@
+# OpenSearch Security - Passkey Authentication Example Configuration
+#
+# This file provides example configurations for passkey (WebAuthn/FIDO2) authentication.
+# Copy the relevant sections to your config.yml and adjust for your environment.
+#
+# Documentation: See PASSKEY_AUTHENTICATION.md for detailed configuration guide
+
+---
+_meta:
+  type: "config"
+  config_version: 2
+
+# ==============================================================================
+# EXAMPLE 1: Basic Passkey Authentication (Recommended Starting Point)
+# ==============================================================================
+# This configuration enables passkey authentication with sensible defaults.
+# Suitable for most production deployments.
+
+config:
+  dynamic:
+    authc:
+      passkey_auth_domain:
+        description: "Passkey authentication with WebAuthn/FIDO2"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: passkey
+          challenge: true
+          config:
+            # REQUIRED: Your OpenSearch domain (must match browser address)
+            rp_id: "opensearch.example.com"
+            
+            # REQUIRED: Human-readable service name
+            rp_name: "OpenSearch"
+            
+            # REQUIRED: List of allowed origins (include protocol and port)
+            allowed_origins:
+              - "https://opensearch.example.com"
+              - "https://dashboards.example.com"
+            
+            # OPTIONAL: Challenge timeout (default: 300000ms = 5 minutes)
+            challenge_timeout_ms: 300000
+            
+            # OPTIONAL: User verification requirement
+            # Options: "required", "preferred", "discouraged"
+            # Default: "preferred"
+            user_verification: "preferred"
+            
+            # OPTIONAL: Attestation conveyance preference
+            # Options: "none", "indirect", "direct"
+            # Default: "none"
+            attestation: "none"
+            
+            # OPTIONAL: Authenticator attachment
+            # Options: "platform", "cross-platform", null (allow both)
+            # Default: null
+            authenticator_attachment: null
+            
+            # OPTIONAL: Resident key requirement
+            # Options: "required", "preferred", "discouraged"
+            # Default: "preferred"
+            resident_key: "preferred"
+            
+            # OPTIONAL: Supported signature algorithms (in priority order)
+            # Default: ["ES256", "RS256"]
+            algorithms:
+              - "ES256"   # ECDSA with SHA-256 (recommended)
+              - "RS256"   # RSASSA-PKCS1-v1_5 with SHA-256
+              - "EdDSA"   # EdDSA (Ed25519)
+        
+        authentication_backend:
+          type: passkey
+          config:
+            # Enable signature counter verification for clone detection
+            enable_signature_counter_check: true
+            
+            # Maximum passkeys per user (default: 10)
+            max_credentials_per_user: 10
+            
+            # Credential expiration in days (0 = never expire)
+            credential_timeout_days: 0
+
+# ==============================================================================
+# EXAMPLE 2: High-Security Configuration
+# ==============================================================================
+# This configuration enforces strict security policies:
+# - Always require user verification (biometric/PIN)
+# - Hardware keys only (cross-platform authenticators)
+# - Direct attestation for audit trail
+# - Short challenge timeout
+# - Limited credentials per user
+# - Annual credential re-registration
+
+config:
+  dynamic:
+    authc:
+      passkey_secure_domain:
+        description: "High-security passkey authentication"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: passkey
+          challenge: true
+          config:
+            rp_id: "secure.example.com"
+            rp_name: "OpenSearch Secure"
+            allowed_origins:
+              - "https://secure.example.com"
+            
+            # Short timeout for high security
+            challenge_timeout_ms: 120000  # 2 minutes
+            
+            # Always require biometric/PIN
+            user_verification: "required"
+            
+            # Full attestation for audit
+            attestation: "direct"
+            
+            # Hardware keys only (USB, NFC)
+            authenticator_attachment: "cross-platform"
+            
+            # Require resident keys (passwordless)
+            resident_key: "required"
+            
+            # Most secure algorithms only
+            algorithms:
+              - "ES256"
+              - "EdDSA"
+        
+        authentication_backend:
+          type: passkey
+          config:
+            enable_signature_counter_check: true
+            max_credentials_per_user: 3
+            credential_timeout_days: 90  # Quarterly re-registration
+
+# ==============================================================================
+# EXAMPLE 3: Development Environment Configuration
+# ==============================================================================
+# This configuration is optimized for development:
+# - Allows localhost origins
+# - Longer timeout for debugging
+# - Relaxed user verification
+# - Signature counter check disabled for convenience
+
+config:
+  dynamic:
+    authc:
+      passkey_dev_domain:
+        description: "Passkey authentication for development"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: passkey
+          challenge: true
+          config:
+            rp_id: "localhost"
+            rp_name: "OpenSearch Dev"
+            allowed_origins:
+              - "http://localhost:5601"   # OpenSearch Dashboards
+              - "http://localhost:9200"   # OpenSearch API
+              - "http://localhost:3000"   # Custom app
+            
+            # Long timeout for debugging
+            challenge_timeout_ms: 600000  # 10 minutes
+            
+            # Don't require verification in dev
+            user_verification: "discouraged"
+            
+            # No attestation needed
+            attestation: "none"
+            
+            # Allow all authenticator types
+            authenticator_attachment: null
+            
+            # Prefer but don't require resident keys
+            resident_key: "preferred"
+            
+            algorithms:
+              - "ES256"
+              - "RS256"
+              - "EdDSA"
+        
+        authentication_backend:
+          type: passkey
+          config:
+            # Disable for development convenience
+            enable_signature_counter_check: false
+            max_credentials_per_user: 20
+            credential_timeout_days: 0
+
+# ==============================================================================
+# EXAMPLE 4: Multi-Backend Configuration (Passkey + Basic Auth)
+# ==============================================================================
+# This configuration combines passkey authentication with basic auth fallback.
+# Users can authenticate with either passkeys or username/password.
+
+config:
+  dynamic:
+    authc:
+      # Primary: Passkey authentication
+      passkey_domain:
+        description: "Passkey authentication (primary)"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: passkey
+          challenge: true
+          config:
+            rp_id: "opensearch.example.com"
+            rp_name: "OpenSearch"
+            allowed_origins:
+              - "https://opensearch.example.com"
+              - "https://dashboards.example.com"
+            challenge_timeout_ms: 300000
+            user_verification: "preferred"
+            attestation: "none"
+            authenticator_attachment: null
+            resident_key: "preferred"
+            algorithms:
+              - "ES256"
+              - "RS256"
+        authentication_backend:
+          type: passkey
+          config:
+            enable_signature_counter_check: true
+            max_credentials_per_user: 10
+            credential_timeout_days: 0
+      
+      # Fallback: Basic authentication
+      basic_internal_auth_domain:
+        description: "Basic authentication (fallback)"
+        http_enabled: true
+        transport_enabled: true
+        order: 1
+        http_authenticator:
+          type: basic
+          challenge: true
+        authentication_backend:
+          type: internal
+
+# ==============================================================================
+# EXAMPLE 5: Multi-Domain Configuration
+# ==============================================================================
+# This configuration supports multiple subdomains using a parent domain as rp_id.
+# Credentials registered on one subdomain work on all subdomains.
+
+config:
+  dynamic:
+    authc:
+      passkey_multi_domain:
+        description: "Passkey authentication across subdomains"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: passkey
+          challenge: true
+          config:
+            # Parent domain allows credentials to work across subdomains
+            rp_id: "example.com"
+            rp_name: "Example Services"
+            
+            # List all subdomains that will use passkeys
+            allowed_origins:
+              - "https://opensearch.example.com"
+              - "https://dashboards.example.com"
+              - "https://api.example.com"
+              - "https://app.example.com"
+            
+            challenge_timeout_ms: 300000
+            user_verification: "preferred"
+            attestation: "none"
+            authenticator_attachment: null
+            resident_key: "preferred"
+            algorithms:
+              - "ES256"
+              - "RS256"
+        authentication_backend:
+          type: passkey
+          config:
+            enable_signature_counter_check: true
+            max_credentials_per_user: 10
+            credential_timeout_days: 0
+
+# ==============================================================================
+# EXAMPLE 6: Platform Authenticators Only (Built-in Biometrics)
+# ==============================================================================
+# This configuration restricts authentication to platform authenticators only.
+# Users must use built-in biometrics (Face ID, Touch ID, Windows Hello, etc.)
+
+config:
+  dynamic:
+    authc:
+      passkey_platform_only:
+        description: "Platform authenticators only (built-in biometrics)"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: passkey
+          challenge: true
+          config:
+            rp_id: "opensearch.example.com"
+            rp_name: "OpenSearch"
+            allowed_origins:
+              - "https://opensearch.example.com"
+            challenge_timeout_ms: 300000
+            user_verification: "required"
+            attestation: "none"
+            
+            # Restrict to platform authenticators (built-in biometrics)
+            authenticator_attachment: "platform"
+            
+            # Require resident keys for passwordless
+            resident_key: "required"
+            
+            algorithms:
+              - "ES256"
+              - "RS256"
+        authentication_backend:
+          type: passkey
+          config:
+            enable_signature_counter_check: true
+            max_credentials_per_user: 5
+            credential_timeout_days: 0
+
+# ==============================================================================
+# EXAMPLE 7: Cross-Platform Authenticators Only (Hardware Keys)
+# ==============================================================================
+# This configuration restricts authentication to cross-platform authenticators.
+# Users must use hardware security keys (YubiKey, Titan Key, etc.)
+
+config:
+  dynamic:
+    authc:
+      passkey_hardware_only:
+        description: "Hardware security keys only"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: passkey
+          challenge: true
+          config:
+            rp_id: "opensearch.example.com"
+            rp_name: "OpenSearch"
+            allowed_origins:
+              - "https://opensearch.example.com"
+            challenge_timeout_ms: 300000
+            user_verification: "preferred"
+            attestation: "direct"  # Full attestation for hardware keys
+            
+            # Restrict to cross-platform authenticators (hardware keys)
+            authenticator_attachment: "cross-platform"
+            
+            resident_key: "preferred"
+            algorithms:
+              - "ES256"
+              - "RS256"
+        authentication_backend:
+          type: passkey
+          config:
+            enable_signature_counter_check: true
+            max_credentials_per_user: 3
+            credential_timeout_days: 365
+
+# ==============================================================================
+# NOTES
+# ==============================================================================
+#
+# 1. HTTPS Requirement:
+#    - WebAuthn requires HTTPS in production
+#    - localhost is allowed for development (HTTP or HTTPS)
+#
+# 2. Relying Party ID:
+#    - Must match the domain in the browser's address bar
+#    - Can be a parent domain to support multiple subdomains
+#    - Cannot include protocol, port, or path
+#
+# 3. Allowed Origins:
+#    - Must include protocol (https://)
+#    - Must include port if non-standard
+#    - Cannot use wildcards
+#
+# 4. User Verification:
+#    - "required": Always require biometric/PIN (highest security)
+#    - "preferred": Request but don't require (balanced)
+#    - "discouraged": Don't request (convenience)
+#
+# 5. Attestation:
+#    - "none": No attestation (recommended for most)
+#    - "indirect": Anonymized attestation
+#    - "direct": Full attestation (audit trail)
+#
+# 6. Authenticator Attachment:
+#    - "platform": Built-in biometrics only
+#    - "cross-platform": Hardware keys only
+#    - null: Allow both (recommended)
+#
+# 7. Resident Key:
+#    - "required": Passwordless only (highest security)
+#    - "preferred": Passwordless if supported (recommended)
+#    - "discouraged": Traditional flow
+#
+# 8. Algorithms:
+#    - ES256: ECDSA with SHA-256 (recommended, best balance)
+#    - RS256: RSA with SHA-256 (wider compatibility)
+#    - EdDSA: Ed25519 (modern, efficient, less compatible)
+#
+# 9. Signature Counter:
+#    - Always enable in production for clone detection
+#    - Can disable in development for convenience
+#
+# 10. Credential Timeout:
+#     - 0: Never expire (default)
+#     - >0: Days until credential expires and must be re-registered
+#
+# ==============================================================================
