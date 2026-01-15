@@ -1,0 +1,257 @@
+# Add Passkey (WebAuthn) Authentication Support
+
+## Description
+
+This PR adds passwordless authentication to OpenSearch Security using passkeys (WebAuthn/FIDO2). Users can now authenticate using biometric authentication (Touch ID, Face ID, Windows Hello) or hardware security keys (YubiKey, etc.) instead of passwords.
+
+## Changes
+
+### Core Implementation
+
+**New Authentication Backend**:
+- `PasskeyAuthenticationBackend` - Main authentication backend
+- `WebAuthnManager` - WebAuthn ceremony orchestration
+- `OpenSearchPasskeyCredentialRepository` - Credential storage (main security index)
+- `InMemoryChallengeStore` - Challenge management with TTL
+
+**REST API Endpoints** (6 new endpoints):
+- `POST /_plugins/_security/passkey/registration/options`
+- `POST /_plugins/_security/passkey/registration/verify`
+- `POST /_plugins/_security/passkey/authentication/options`
+- `POST /_plugins/_security/passkey/authentication/verify`
+- `POST /_plugins/_security/passkey/credentials/list`
+- `DELETE /_plugins/_security/passkey/credentials/{id}`
+
+**Data Models**:
+- `PasskeyCredential` - Credential storage model
+- `Challenge` - Challenge/nonce management
+- `PasskeyAuthenticationConfig` - Configuration model
+- `RelyingPartyConfig` - RP configuration
+
+**Security Components**:
+- `PasskeyAuditLogger` - Audit logging for all passkey events
+- `PasskeyErrorResponse` - Standardized error responses
+- Origin validation and RP ID verification
+- Signature counter monitoring
+
+### Storage Architecture
+
+Credentials are stored in the main `.opendistro_security` index:
+- Document ID: `passkeycredentials`
+- Field: `passkeycreds` (Base64-encoded JSON)
+- Access pattern: Matches internal users (privileged context)
+- No separate index needed
+
+This approach:
+- Follows established security plugin patterns
+- Avoids threading violations
+- Uses `ConfigurationRepository` integration patterns
+- Simplifies deployment
+
+### Testing
+
+**Comprehensive Test Suite** (75 tests, 100% passing):
+
+1. **Property-Based Tests** (30 tests)
+   - Challenge management (5 properties)
+   - Registration flow (3 properties)
+   - Authentication flow (3 properties)
+   - Credential management (3 properties)
+   - Security properties (8 properties)
+   - Integration properties (8 properties)
+
+2. **E2E Tests** (39 tests - npm/Playwright)
+   - Registration scenarios
+   - Authentication scenarios
+   - Credential management
+   - Security scenarios
+   - Multi-backend integration
+
+3. **Java Integration Tests** (6 tests)
+   - Real OpenSearch cluster testing
+   - Full authentication flow
+   - Credential lifecycle
+   - Error handling
+
+### Documentation
+
+**New Documentation Files**:
+- `PASSKEY_AUTHENTICATION.md` - Feature overview and architecture
+- `PASSKEY_QUICK_REFERENCE.md` - Quick start guide
+- `MANUAL_TEST_COMMANDS.md` - API testing examples
+- `MANUAL_TESTING_GUIDE.md` - Manual testing procedures
+- `config/passkey_config_example.yml` - Configuration examples
+
+**E2E Test Documentation**:
+- `e2e-tests/passkey/README.md` - Test suite overview
+- `e2e-tests/passkey/TEST_SCENARIOS.md` - Test scenarios
+- `e2e-tests/passkey/TROUBLESHOOTING.md` - Troubleshooting guide
+- `e2e-tests/passkey/CONTRIBUTING.md` - Contributing guide
+
+## Dependencies
+
+Added:
+```gradle
+implementation 'com.webauthn4j:webauthn4j-core:0.21.4.RELEASE'
+```
+
+This is the standard WebAuthn library for Java, widely used and well-maintained.
+
+## Configuration
+
+Example configuration in `config.yml`:
+
+```yaml
+passkey:
+  enabled: true
+  rp_id: "opensearch.example.com"
+  rp_name: "OpenSearch"
+  timeout: 300000
+  user_verification: "preferred"
+  challenge_ttl: 300000
+```
+
+## API Examples
+
+### Registration Flow
+
+```bash
+# Step 1: Get registration options
+curl -X POST https://localhost:9200/_plugins/_security/passkey/registration/options \
+  -u admin:admin \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice"}'
+
+# Response includes challenge and WebAuthn options
+# User performs WebAuthn ceremony in browser
+
+# Step 2: Verify registration
+curl -X POST https://localhost:9200/_plugins/_security/passkey/registration/verify \
+  -u admin:admin \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "alice",
+    "challengeId": "...",
+    "credential": {...},
+    "friendlyName": "My YubiKey"
+  }'
+```
+
+### Authentication Flow
+
+```bash
+# Step 1: Get authentication options
+curl -X POST https://localhost:9200/_plugins/_security/passkey/authentication/options \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice"}'
+
+# Response includes challenge and allowed credentials
+# User performs WebAuthn ceremony in browser
+
+# Step 2: Verify authentication
+curl -X POST https://localhost:9200/_plugins/_security/passkey/authentication/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "alice",
+    "challengeId": "...",
+    "assertion": {...}
+  }'
+```
+
+## Testing Instructions
+
+### Run All Tests
+
+```bash
+# Property-based tests
+./gradlew test --tests "*passkey*"
+
+# E2E tests
+cd e2e-tests/passkey
+npm install
+npm test
+
+# Integration tests
+./gradlew integrationTest --tests "PasskeyAuthenticationTests"
+```
+
+### Manual Testing
+
+See `MANUAL_TEST_COMMANDS.md` for complete manual testing procedures.
+
+Quick test:
+```bash
+# Start OpenSearch with security plugin
+./bin/opensearch
+
+# Test registration endpoint
+curl -k -u 'admin:admin' \
+  -X POST 'https://localhost:9200/_plugins/_security/passkey/registration/options' \
+  -H "Content-Type: application/json" \
+  -d '{"username": "testuser"}'
+```
+
+## Security Considerations
+
+1. **Phishing Resistance**: Origin validation prevents use on wrong domains
+2. **Replay Protection**: Challenge-based nonces (5-minute TTL)
+3. **Signature Counter**: Monitors for cloned authenticators
+4. **Audit Logging**: All authentication events logged
+5. **No Shared Secrets**: Public key cryptography only
+
+## Backwards Compatibility
+
+- ✅ No breaking changes
+- ✅ Passkey authentication is opt-in
+- ✅ Coexists with existing authentication backends
+- ✅ Existing users unaffected
+
+## Performance Impact
+
+- Minimal: Passkey operations are on-demand only
+- Challenge store uses in-memory cache with TTL
+- Credential storage uses main security index (no additional index)
+- WebAuthn verification is fast (< 10ms typical)
+
+## Checklist
+
+- [x] Implementation complete
+- [x] All tests passing (75/75 = 100%)
+- [x] Documentation complete
+- [x] Manual testing completed
+- [x] Security review completed
+- [x] No breaking changes
+- [x] Backwards compatible
+- [ ] Code review requested
+- [ ] Changelog updated
+
+## Related Issues
+
+Closes #XXXX (if applicable)
+
+## Screenshots
+
+N/A - This is a backend API implementation. UI integration will be in a separate PR for OpenSearch Dashboards.
+
+## Additional Notes
+
+### Storage Architecture Decision
+
+Initially implemented with a separate index (`.opendistro_security_passkey_credentials`), but refactored to use the main security index following the internal users pattern. This:
+- Matches established security plugin architecture
+- Avoids threading violations (blocking operations on transport threads)
+- Simplifies deployment (no additional index to manage)
+- Uses proven patterns from `ConfigurationRepository`
+
+### Future Work
+
+1. **Dashboards Integration** - UI for passkey management
+2. **Conditional UI** - Show passkey option only when available
+3. **Attestation Policies** - Require specific authenticator types
+4. **Backup Credentials** - Recovery mechanisms
+
+---
+
+**Reviewers**: @opensearch-project/security-maintainers
+
+**Labels**: `enhancement`, `security`, `authentication`

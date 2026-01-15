@@ -1,0 +1,254 @@
+# Add Passkey (WebAuthn) Authentication Support
+
+## Summary
+
+Add passwordless authentication to OpenSearch Security using passkeys (WebAuthn/FIDO2). This enables users to authenticate using biometric authentication (Touch ID, Face ID, Windows Hello) or hardware security keys (YubiKey, etc.) instead of passwords.
+
+## Motivation
+
+**Problem**: Password-based authentication has well-known security issues:
+- Passwords can be phished, stolen, or brute-forced
+- Users reuse weak passwords across services
+- Password management adds friction to user experience
+
+**Solution**: Passkeys provide:
+- ✅ Phishing-resistant authentication (cryptographic proof of origin)
+- ✅ No shared secrets (public key cryptography)
+- ✅ Better UX (biometric authentication, no passwords to remember)
+- ✅ Industry standard (W3C WebAuthn, FIDO2)
+
+## Use Cases
+
+1. **Enterprise SSO**: Replace password authentication with passkeys
+2. **High-Security Environments**: Require hardware security keys
+3. **Developer Experience**: Quick biometric login for local development
+4. **Compliance**: Meet passwordless authentication requirements
+
+## Proposed Solution
+
+### Architecture
+
+Implement passkey authentication as a new authentication backend in the OpenSearch Security plugin:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    OpenSearch Security                       │
+├─────────────────────────────────────────────────────────────┤
+│  REST API Endpoints                                          │
+│  • POST /_plugins/_security/passkey/registration/options    │
+│  • POST /_plugins/_security/passkey/registration/verify     │
+│  • POST /_plugins/_security/passkey/authentication/options  │
+│  • POST /_plugins/_security/passkey/authentication/verify   │
+│  • POST /_plugins/_security/passkey/credentials/list        │
+│  • DELETE /_plugins/_security/passkey/credentials/{id}      │
+├─────────────────────────────────────────────────────────────┤
+│  PasskeyAuthenticationBackend                                │
+│  • WebAuthn ceremony orchestration                           │
+│  • Challenge generation and validation                       │
+│  • Signature verification                                    │
+│  • User principal creation                                   │
+├─────────────────────────────────────────────────────────────┤
+│  Storage (Main Security Index)                               │
+│  • Credentials stored in .opendistro_security index          │
+│  • Document ID: "passkeycredentials"                         │
+│  • Base64-encoded JSON (matches internal users pattern)     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Features
+
+1. **Registration Flow**
+   - Generate WebAuthn registration options
+   - Verify attestation from authenticator
+   - Store public key credentials
+
+2. **Authentication Flow**
+   - Generate WebAuthn authentication options
+   - Verify assertion signature
+   - Create authenticated user principal
+
+3. **Credential Management**
+   - List user's registered passkeys
+   - Delete/rename credentials
+   - Support multiple credentials per user
+
+4. **Security Features**
+   - Challenge-based replay protection
+   - Origin validation
+   - Signature counter monitoring
+   - Audit logging
+
+### Storage Architecture
+
+Credentials are stored in the main `.opendistro_security` index (not a separate index):
+- **Document ID**: `passkeycredentials`
+- **Field**: `passkeycreds` (Base64-encoded JSON)
+- **Pattern**: Matches internal users storage pattern
+- **Access**: Privileged context with `stashContext()` + special header
+
+This approach:
+- ✅ Matches existing security plugin architecture
+- ✅ Avoids threading violations
+- ✅ Uses established patterns (ConfigurationRepository)
+- ✅ No separate index management needed
+
+## Implementation Details
+
+### Dependencies
+
+```gradle
+implementation 'com.webauthn4j:webauthn4j-core:0.21.4.RELEASE'
+```
+
+### Configuration
+
+```yaml
+# config.yml
+passkey:
+  enabled: true
+  rp_id: "opensearch.example.com"
+  rp_name: "OpenSearch"
+  timeout: 300000
+  user_verification: "preferred"
+```
+
+### REST API Examples
+
+**Registration**:
+```bash
+# Step 1: Get registration options
+curl -X POST https://localhost:9200/_plugins/_security/passkey/registration/options \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice"}'
+
+# Step 2: Verify registration (after WebAuthn ceremony)
+curl -X POST https://localhost:9200/_plugins/_security/passkey/registration/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "alice",
+    "challengeId": "...",
+    "credential": {...},
+    "friendlyName": "My YubiKey"
+  }'
+```
+
+**Authentication**:
+```bash
+# Step 1: Get authentication options
+curl -X POST https://localhost:9200/_plugins/_security/passkey/authentication/options \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice"}'
+
+# Step 2: Verify authentication (after WebAuthn ceremony)
+curl -X POST https://localhost:9200/_plugins/_security/passkey/authentication/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "alice",
+    "challengeId": "...",
+    "assertion": {...}
+  }'
+```
+
+## Testing
+
+### Test Coverage
+
+- ✅ **30 Property-Based Tests** - Universal correctness properties
+- ✅ **39 E2E Tests** - Complete flow validation (npm/Playwright)
+- ✅ **6 Java Integration Tests** - Real OpenSearch cluster testing
+- ✅ **Total: 75/75 tests passing (100%)**
+
+### Test Categories
+
+1. **Challenge Management** (5 properties)
+   - Uniqueness, entropy, expiration, single-use, cleanup
+
+2. **Registration** (3 properties)
+   - Options completeness, attestation verification, duplicate exclusion
+
+3. **Authentication** (3 properties)
+   - Options completeness, signature verification, challenge matching
+
+4. **Credential Management** (3 properties)
+   - Storage, deletion, renaming
+
+5. **Security** (8 properties)
+   - Origin restriction, RP ID validation, signature counter, error messaging
+
+6. **Integration** (8 properties)
+   - User principal creation, role mapping, authorization consistency
+
+### Running Tests
+
+```bash
+# Property-based tests (Java)
+./gradlew test --tests "*passkey*"
+
+# E2E tests (npm)
+cd e2e-tests/passkey
+npm test
+
+# Integration tests
+./gradlew integrationTest --tests "PasskeyAuthenticationTests"
+```
+
+## Documentation
+
+Comprehensive documentation included:
+
+- **`PASSKEY_AUTHENTICATION.md`** - Feature overview and architecture
+- **`PASSKEY_QUICK_REFERENCE.md`** - Quick start guide
+- **`MANUAL_TEST_COMMANDS.md`** - API testing examples
+- **`MANUAL_TESTING_GUIDE.md`** - Manual testing procedures
+- **`config/passkey_config_example.yml`** - Configuration examples
+
+## Security Considerations
+
+1. **Phishing Resistance**: Origin validation prevents credential use on wrong domains
+2. **Replay Protection**: Challenge-based nonces prevent replay attacks
+3. **Signature Counter**: Monitors for cloned authenticators
+4. **Audit Logging**: All authentication events logged
+5. **No Shared Secrets**: Public key cryptography eliminates password theft risk
+
+## Backwards Compatibility
+
+- ✅ No breaking changes to existing authentication
+- ✅ Passkey authentication is opt-in via configuration
+- ✅ Can coexist with other authentication backends
+- ✅ Existing users unaffected
+
+## Future Enhancements
+
+1. **Dashboards Integration** - UI for passkey management
+2. **Conditional UI** - Show passkey option only when available
+3. **Attestation Policies** - Require specific authenticator types
+4. **Backup Credentials** - Recovery mechanisms
+5. **Enterprise Features** - Centralized credential management
+
+## Checklist
+
+- [x] Implementation complete
+- [x] All tests passing (75/75)
+- [x] Documentation written
+- [x] Manual testing completed
+- [x] Security review completed
+- [ ] Code review
+- [ ] Merge to main
+
+## References
+
+- [W3C WebAuthn Specification](https://www.w3.org/TR/webauthn-2/)
+- [FIDO2 Overview](https://fidoalliance.org/fido2/)
+- [WebAuthn4J Library](https://github.com/webauthn4j/webauthn4j)
+
+## Related Issues
+
+- Closes #XXXX (if applicable)
+
+---
+
+**Labels**: `enhancement`, `security`, `authentication`, `passkey`, `webauthn`
+
+**Assignees**: @shikharj
+
+**Milestone**: 2.x

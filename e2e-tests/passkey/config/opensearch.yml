@@ -1,0 +1,32 @@
+# OpenSearch configuration for passkey e2e tests
+
+cluster.name: opensearch-passkey-test
+node.name: opensearch-passkey-test-node
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+
+# Security plugin settings
+plugins.security.ssl.transport.pemcert_filepath: certs/node.pem
+plugins.security.ssl.transport.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/root-ca.pem
+plugins.security.ssl.transport.enforce_hostname_verification: false
+
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: certs/node.pem
+plugins.security.ssl.http.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
+
+plugins.security.allow_default_init_securityindex: true
+plugins.security.authcz.admin_dn:
+  - "CN=admin,OU=Test,O=OpenSearch,L=Test,ST=Test,C=US"
+
+plugins.security.nodes_dn:
+  - "CN=node,OU=Test,O=OpenSearch,L=Test,ST=Test,C=US"
+
+plugins.security.audit.type: internal_opensearch
+plugins.security.enable_snapshot_restore_privilege: true
+plugins.security.check_snapshot_restore_write_privileges: true
+
+plugins.security.restapi.roles_enabled: ["all_access", "security_rest_api_access"]

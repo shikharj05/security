@@ -1,0 +1,34 @@
+# OpenSearch Security configuration for passkey e2e tests
+
+_meta:
+  type: "config"
+  config_version: 2
+
+config:
+  dynamic:
+    http:
+      anonymous_auth_enabled: false
+      xff:
+        enabled: false
+    authc:
+      # Passkey authentication domain
+      passkey_auth_domain:
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: basic
+          challenge: true
+        authentication_backend:
+          type: internal
+      
+      # Basic authentication domain (fallback)
+      basic_auth_domain:
+        http_enabled: true
+        transport_enabled: true
+        order: 1
+        http_authenticator:
+          type: basic
+          challenge: true
+        authentication_backend:
+          type: internal

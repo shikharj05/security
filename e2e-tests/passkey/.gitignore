@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+*.log
+.env
+certs/*.pem
+certs/*.key
+certs/*.crt
+!certs/.gitkeep

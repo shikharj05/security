@@ -1,0 +1,31 @@
+# Roles for passkey e2e tests
+
+_meta:
+  type: "roles"
+  config_version: 2
+
+# Role for passkey users
+passkey_user_role:
+  reserved: false
+  cluster_permissions:
+    - "cluster:monitor/health"
+    - "cluster:monitor/state"
+  index_permissions:
+    - index_patterns:
+        - "test-*"
+      allowed_actions:
+        - "indices:data/read/*"
+        - "indices:data/write/*"
+        - "indices:admin/create"
+        - "indices:admin/delete"
+
+# Role for basic auth users
+basic_user_role:
+  reserved: false
+  cluster_permissions:
+    - "cluster:monitor/health"
+  index_permissions:
+    - index_patterns:
+        - "basic-*"
+      allowed_actions:
+        - "indices:data/read/*"

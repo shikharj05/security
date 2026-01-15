@@ -1,0 +1,26 @@
+# Role mappings for passkey e2e tests
+
+_meta:
+  type: "rolesmapping"
+  config_version: 2
+
+# Map admin backend role to all_access
+all_access:
+  reserved: false
+  backend_roles:
+    - "admin"
+  description: "Admin access"
+
+# Map passkey_user backend role to passkey_user_role
+passkey_user_role:
+  reserved: false
+  backend_roles:
+    - "passkey_user"
+  description: "Passkey user access"
+
+# Map basic_user backend role to basic_user_role
+basic_user_role:
+  reserved: false
+  backend_roles:
+    - "basic_user"
+  description: "Basic user access"

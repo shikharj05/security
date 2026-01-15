@@ -1,0 +1,26 @@
+{
+  "name": "opensearch-security-passkey-e2e-tests",
+  "version": "1.0.0",
+  "description": "End-to-end tests for OpenSearch Security passkey authentication",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "cluster:start": "./scripts/start-cluster.sh",
+    "cluster:stop": "docker-compose down",
+    "cleanup": "./scripts/cleanup.sh"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@simplewebauthn/server": "^13.2.2",
+    "jest": "^29.7.0",
+    "node-fetch": "^3.3.2"
+  },
+  "dependencies": {
+    "base64url": "^3.0.1",
+    "cbor": "^9.0.2",
+    "elliptic": "^6.5.4"
+  }
+}

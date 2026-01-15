@@ -1,0 +1,56 @@
+services:
+  opensearch:
+    build:
+      context: ../../
+      dockerfile: e2e-tests/passkey/Dockerfile
+    image: opensearch-passkey-test:latest
+    container_name: opensearch-passkey-test
+    environment:
+      - cluster.name=opensearch-passkey-test
+      - node.name=opensearch-passkey-test-node
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Admin123!
+      - plugins.security.ssl.transport.pemcert_filepath=certs/node.pem
+      - plugins.security.ssl.transport.pemkey_filepath=certs/node-key.pem
+      - plugins.security.ssl.transport.pemtrustedcas_filepath=certs/root-ca.pem
+      - plugins.security.ssl.http.enabled=true
+      - plugins.security.ssl.http.pemcert_filepath=certs/node.pem
+      - plugins.security.ssl.http.pemkey_filepath=certs/node-key.pem
+      - plugins.security.ssl.http.pemtrustedcas_filepath=certs/root-ca.pem
+      - plugins.security.allow_default_init_securityindex=true
+      - plugins.security.authcz.admin_dn=CN=admin,OU=Test,O=OpenSearch,L=Test,ST=Test,C=US
+      - plugins.security.nodes_dn=CN=node,OU=Test,O=OpenSearch,L=Test,ST=Test,C=US
+      - plugins.security.audit.type=internal_opensearch
+      - plugins.security.enable_snapshot_restore_privilege=true
+      - plugins.security.check_snapshot_restore_write_privileges=true
+      - plugins.security.restapi.roles_enabled=["all_access", "security_rest_api_access"]
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./config/opensearch.yml:/usr/share/opensearch/config/opensearch.yml
+      - ./config/config.yml:/usr/share/opensearch/config/opensearch-security/config.yml
+      - ./config/internal_users.yml:/usr/share/opensearch/config/opensearch-security/internal_users.yml
+      - ./config/roles.yml:/usr/share/opensearch/config/opensearch-security/roles.yml
+      - ./config/roles_mapping.yml:/usr/share/opensearch/config/opensearch-security/roles_mapping.yml
+      - ./certs:/usr/share/opensearch/config/certs
+    ports:
+      - 9200:9200
+      - 9600:9600
+    networks:
+      - opensearch-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -u admin:Admin123! https://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+networks:
+  opensearch-net:
+    driver: bridge
